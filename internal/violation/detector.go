@@ -1,6 +1,7 @@
 package violation
 
 import (
+	"log"
 	"sync"
 	"time"
 
@@ -8,19 +9,19 @@ import (
 	"github.com/jurispath/jurispath/pkg/model"
 )
 
-// Detector creates and stores violation records for non-compliant paths.
+// Detector creates and persists violation records for non-compliant paths.
 type Detector struct {
-	mu         sync.RWMutex
-	violations []*model.Violation
-	listeners  []chan *model.Violation
+	mu        sync.RWMutex
+	store     ViolationStore
+	listeners []chan *model.Violation
 }
 
-// NewDetector creates a new violation detector.
-func NewDetector() *Detector {
-	return &Detector{}
+// NewDetector creates a new violation detector backed by the given store.
+func NewDetector(store ViolationStore) *Detector {
+	return &Detector{store: store}
 }
 
-// Record creates a violation from a failed compliance check.
+// Record creates a violation from a failed compliance check and persists it.
 func (d *Detector) Record(txID, policyID, violatedClause string, path *model.SCIONPath, offending []model.ASHop) *model.Violation {
 	v := &model.Violation{
 		ID:             uuid.New().String(),
@@ -33,8 +34,11 @@ func (d *Detector) Record(txID, policyID, violatedClause string, path *model.SCI
 		Timestamp:      time.Now().UTC(),
 	}
 
+	if err := d.store.Append(v); err != nil {
+		log.Printf("ERROR: persisting violation %s: %v", v.ID, err)
+	}
+
 	d.mu.Lock()
-	d.violations = append(d.violations, v)
 	listeners := make([]chan *model.Violation, len(d.listeners))
 	copy(listeners, d.listeners)
 	d.mu.Unlock()
@@ -59,13 +63,9 @@ func (d *Detector) Subscribe() chan *model.Violation {
 	return ch
 }
 
-// List returns all recorded violations.
-func (d *Detector) List() []*model.Violation {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	out := make([]*model.Violation, len(d.violations))
-	copy(out, d.violations)
-	return out
+// List returns all recorded violations from the store.
+func (d *Detector) List() ([]*model.Violation, error) {
+	return d.store.List()
 }
 
 func classifySeverity(offending []model.ASHop) string {

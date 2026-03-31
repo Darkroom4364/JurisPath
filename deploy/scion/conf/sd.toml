@@ -1,0 +1,15 @@
+[general]
+id = "sd"
+config_dir = "/etc/scion"
+
+[log.console]
+level = "info"
+
+[trust_db]
+connection = "/var/lib/scion/trust-sd.db"
+
+[path_db]
+connection = "/var/lib/scion/path-sd.db"
+
+[sd]
+address = "0.0.0.0:30255"

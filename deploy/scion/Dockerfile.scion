@@ -1,0 +1,29 @@
+FROM debian:bookworm-slim
+
+ARG SCION_VERSION=0.14.0
+
+# Install dependencies and SCION binaries
+# NOTE: The exact release asset name may vary. Check:
+#   https://github.com/scionproto/scion/releases/tag/v0.14.0
+# The archive is expected to contain: scion-control, scion-router, scion-daemon, scion-pki, scion
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends wget ca-certificates supervisor && \
+    wget -q "https://github.com/scionproto/scion/releases/download/v${SCION_VERSION}/scion_v${SCION_VERSION}_amd64_linux.tar.gz" \
+         -O /tmp/scion.tar.gz && \
+    mkdir -p /tmp/scion && \
+    tar -xzf /tmp/scion.tar.gz -C /tmp/scion && \
+    cp /tmp/scion/scion* /usr/local/bin/ 2>/dev/null || \
+    cp /tmp/scion/* /usr/local/bin/ 2>/dev/null || true && \
+    chmod +x /usr/local/bin/scion* && \
+    rm -rf /tmp/scion /tmp/scion.tar.gz && \
+    apt-get purge -y wget && \
+    apt-get autoremove -y && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create directories for SCION config, crypto, and logs
+RUN mkdir -p /etc/scion /var/lib/scion /var/log/scion
+
+COPY supervisord.conf /etc/supervisor/conf.d/scion.conf
+
+CMD ["supervisord", "-n", "-c", "/etc/supervisor/conf.d/scion.conf"]

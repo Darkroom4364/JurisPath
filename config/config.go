@@ -7,9 +7,10 @@ import (
 
 // Config holds application configuration.
 type Config struct {
-	ListenAddr string
-	PolicyDir  string
+	ListenAddr   string
+	PolicyDir    string
 	DashboardDir string
+	DataDir      string
 }
 
 // Load reads configuration from environment variables with defaults.
@@ -18,6 +19,7 @@ func Load() *Config {
 		ListenAddr:   envOr("JURISPATH_LISTEN", ":8080"),
 		PolicyDir:    envOr("JURISPATH_POLICY_DIR", "policies"),
 		DashboardDir: envOr("JURISPATH_DASHBOARD_DIR", "dashboard"),
+		DataDir:      envOr("JURISPATH_DATA_DIR", "data/"),
 	}
 }
 

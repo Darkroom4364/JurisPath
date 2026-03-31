@@ -1,24 +1,130 @@
 version: "3.9"
 
+# JurisPath 3-ISD SCION Topology
+# ═══════════════════════════════
+# ISD-1 (CH):  AS 1-ff00:0:110 (core)   + AS 1-ff00:0:111 (non-core, validator)
+# ISD-2 (EU):  AS 2-ff00:0:210 (core)   + AS 2-ff00:0:211 (non-core, validator)
+# ISD-3 (X):   AS 3-ff00:0:310 (core)
+#
+# Pre-requisites:
+#   1. Build SCION base image:  docker build -f scion/Dockerfile.scion -t scion-base scion/
+#   2. Generate crypto:         ./scripts/gen-topo.sh
+#   3. Run:                     docker compose up
+
+x-scion-common: &scion-common
+  image: scion-base
+  restart: unless-stopped
+  networks:
+    - transit
+
 services:
+  # ── ISD-1 (CH) Core: AS 1-ff00:0:110 ──────────────────────────────────
+  as110-ch-core:
+    <<: *scion-common
+    container_name: as110-ch-core
+    hostname: as110
+    networks:
+      transit:
+        ipv4_address: 10.100.0.11
+    volumes:
+      - ./topology/isd-ch/as110/topology.json:/etc/scion/topology.json:ro
+      - ./topology/isd-ch/as110/crypto:/etc/scion/crypto:ro
+      - ./scion/conf/cs.toml:/etc/scion/cs.toml:ro
+      - ./scion/conf/br.toml:/etc/scion/br.toml:ro
+      - ./scion/conf/sd.toml:/etc/scion/sd.toml:ro
+    ports:
+      - "31000:31000/tcp"   # control service
+      - "30452:30452/tcp"   # CS API
+
+  # ── ISD-1 (CH) Non-core: AS 1-ff00:0:111 (validator) ──────────────────
+  as111-ch-validator:
+    <<: *scion-common
+    container_name: as111-ch-validator
+    hostname: as111
+    networks:
+      transit:
+        ipv4_address: 10.100.0.12
+    volumes:
+      - ./topology/isd-ch/as111/topology.json:/etc/scion/topology.json:ro
+      - ./topology/isd-ch/as111/crypto:/etc/scion/crypto:ro
+      - ./scion/conf/cs.toml:/etc/scion/cs.toml:ro
+      - ./scion/conf/br.toml:/etc/scion/br.toml:ro
+      - ./scion/conf/sd.toml:/etc/scion/sd.toml:ro
+
+  # ── ISD-2 (EU) Core: AS 2-ff00:0:210 ──────────────────────────────────
+  as210-eu-core:
+    <<: *scion-common
+    container_name: as210-eu-core
+    hostname: as210
+    networks:
+      transit:
+        ipv4_address: 10.100.0.21
+    volumes:
+      - ./topology/isd-eu/as210/topology.json:/etc/scion/topology.json:ro
+      - ./topology/isd-eu/as210/crypto:/etc/scion/crypto:ro
+      - ./scion/conf/cs.toml:/etc/scion/cs.toml:ro
+      - ./scion/conf/br.toml:/etc/scion/br.toml:ro
+      - ./scion/conf/sd.toml:/etc/scion/sd.toml:ro
+
+  # ── ISD-2 (EU) Non-core: AS 2-ff00:0:211 (validator) ──────────────────
+  as211-eu-validator:
+    <<: *scion-common
+    container_name: as211-eu-validator
+    hostname: as211
+    networks:
+      transit:
+        ipv4_address: 10.100.0.22
+    volumes:
+      - ./topology/isd-eu/as211/topology.json:/etc/scion/topology.json:ro
+      - ./topology/isd-eu/as211/crypto:/etc/scion/crypto:ro
+      - ./scion/conf/cs.toml:/etc/scion/cs.toml:ro
+      - ./scion/conf/br.toml:/etc/scion/br.toml:ro
+      - ./scion/conf/sd.toml:/etc/scion/sd.toml:ro
+
+  # ── ISD-3 (X) Core: AS 3-ff00:0:310 ───────────────────────────────────
+  as310-x-core:
+    <<: *scion-common
+    container_name: as310-x-core
+    hostname: as310
+    networks:
+      transit:
+        ipv4_address: 10.100.0.31
+    volumes:
+      - ./topology/isd-x/as310/topology.json:/etc/scion/topology.json:ro
+      - ./topology/isd-x/as310/crypto:/etc/scion/crypto:ro
+      - ./scion/conf/cs.toml:/etc/scion/cs.toml:ro
+      - ./scion/conf/br.toml:/etc/scion/br.toml:ro
+      - ./scion/conf/sd.toml:/etc/scion/sd.toml:ro
+
+  # ── JurisPath Service ─────────────────────────────────────────────────
   jurispath:
     build:
       context: ../
       dockerfile: Dockerfile
+    container_name: jurispath
+    hostname: jurispath
     ports:
       - "8080:8080"
     environment:
       JURISPATH_LISTEN: ":8080"
       JURISPATH_POLICY_DIR: /etc/jurispath/policies
+      # SCION daemon addresses for path queries
+      SCION_DAEMON_CH: "10.100.0.12:30255"
+      SCION_DAEMON_EU: "10.100.0.22:30255"
+    networks:
+      transit:
+        ipv4_address: 10.100.0.100
+    depends_on:
+      - as110-ch-core
+      - as111-ch-validator
+      - as210-eu-core
+      - as211-eu-validator
+      - as310-x-core
     restart: unless-stopped
 
-  # SCION ISD containers will be added in WP1
-  # isd-ch-core:
-  #   image: scion:v0.14.0
-  #   ...
-  # isd-eu-core:
-  #   image: scion:v0.14.0
-  #   ...
-  # isd-x-core:
-  #   image: scion:v0.14.0
-  #   ...
+networks:
+  transit:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.100.0.0/24

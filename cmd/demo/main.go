@@ -41,6 +41,69 @@ func main() {
 		{IA: "1-ff00:0:111", ISD: 1, AS: "ff00:0:111"},
 	}
 	sendCheck(baseURL, "tx-chf-chf-001", "swiss-dlt-act-v1", swissHops)
+
+	// Scenario D: Path pre-filtering (paper Scenario C)
+	// A validator queries available SCION paths and JurisPath indicates which are compliant.
+	fmt.Println("\n=== Scenario D: Path Pre-filtering ===")
+	candidatePaths := []model.SCIONPath{
+		{
+			Fingerprint: "path-ch-eu-direct",
+			Hops: []model.ASHop{
+				{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"},
+				{IA: "1-ff00:0:111", ISD: 1, AS: "ff00:0:111"},
+				{IA: "2-ff00:0:210", ISD: 2, AS: "ff00:0:210"},
+				{IA: "2-ff00:0:211", ISD: 2, AS: "ff00:0:211"},
+			},
+		},
+		{
+			Fingerprint: "path-via-isd-x",
+			Hops: []model.ASHop{
+				{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"},
+				{IA: "3-ff00:0:310", ISD: 3, AS: "ff00:0:310"},
+				{IA: "2-ff00:0:210", ISD: 2, AS: "ff00:0:210"},
+			},
+		},
+		{
+			Fingerprint: "path-all-three-isds",
+			Hops: []model.ASHop{
+				{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"},
+				{IA: "3-ff00:0:310", ISD: 3, AS: "ff00:0:310"},
+				{IA: "2-ff00:0:210", ISD: 2, AS: "ff00:0:210"},
+				{IA: "3-ff00:0:311", ISD: 3, AS: "ff00:0:311"},
+			},
+		},
+	}
+	sendFilterPaths(baseURL, "chf-eur-settlement-v1", candidatePaths)
+}
+
+func sendFilterPaths(baseURL, policyID string, paths []model.SCIONPath) {
+	req := api.FilterPathsRequest{
+		PolicyID: policyID,
+		Paths:    paths,
+	}
+
+	body, _ := json.Marshal(req)
+	resp, err := http.Post(baseURL+"/api/filter-paths", "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Fatalf("filter-paths request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Compliant    []model.SCIONPath `json:"compliant"`
+		NonCompliant []model.SCIONPath `json:"non_compliant"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	fmt.Printf("  Candidate paths: %d\n", len(paths))
+	fmt.Printf("  Compliant: %d\n", len(result.Compliant))
+	for _, p := range result.Compliant {
+		fmt.Printf("    [PASS] %s (%d hops)\n", p.Fingerprint, len(p.Hops))
+	}
+	fmt.Printf("  Non-compliant (grayed out): %d\n", len(result.NonCompliant))
+	for _, p := range result.NonCompliant {
+		fmt.Printf("    [SKIP] %s (%d hops)\n", p.Fingerprint, len(p.Hops))
+	}
 }
 
 func sendCheck(baseURL, txID, policyID string, hops []model.ASHop) {

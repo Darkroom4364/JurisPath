@@ -91,4 +91,82 @@ function flashPath(type) {
     }
 }
 
+// Scenario C: Path pre-filtering display
+function displayPrefilterResults(result) {
+    const container = document.getElementById('prefilter-results');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    if (result.compliant && result.compliant.length > 0) {
+        result.compliant.forEach(path => {
+            const card = document.createElement('div');
+            card.className = 'prefilter-card compliant';
+            card.style.borderLeft = '4px solid #22c55e';
+            card.style.padding = '0.75rem';
+            card.style.marginBottom = '0.5rem';
+            card.style.background = 'rgba(34, 197, 94, 0.08)';
+            card.style.borderRadius = '6px';
+
+            const hopsStr = path.hops.map(h => h.ia).join(' -> ');
+            card.innerHTML = `
+                <div style="font-weight: 600; color: #22c55e;">COMPLIANT</div>
+                <div style="font-size: 0.85rem; margin-top: 0.25rem;">
+                    <code>${path.fingerprint || 'path'}</code>
+                </div>
+                <div style="font-size: 0.8rem; color: var(--text-dim, #888); margin-top: 0.25rem;">
+                    ${hopsStr}
+                </div>
+            `;
+            container.appendChild(card);
+        });
+    }
+
+    if (result.non_compliant && result.non_compliant.length > 0) {
+        result.non_compliant.forEach(path => {
+            const card = document.createElement('div');
+            card.className = 'prefilter-card non-compliant';
+            card.style.borderLeft = '4px solid #6b7280';
+            card.style.padding = '0.75rem';
+            card.style.marginBottom = '0.5rem';
+            card.style.background = 'rgba(107, 114, 128, 0.08)';
+            card.style.borderRadius = '6px';
+            card.style.opacity = '0.5';
+
+            const hopsStr = path.hops.map(h => h.ia).join(' -> ');
+            card.innerHTML = `
+                <div style="font-weight: 600; color: #6b7280;">NON-COMPLIANT</div>
+                <div style="font-size: 0.85rem; margin-top: 0.25rem;">
+                    <code>${path.fingerprint || 'path'}</code>
+                </div>
+                <div style="font-size: 0.8rem; color: var(--text-dim, #888); margin-top: 0.25rem;">
+                    ${hopsStr}
+                </div>
+            `;
+            container.appendChild(card);
+        });
+    }
+
+    if ((!result.compliant || result.compliant.length === 0) &&
+        (!result.non_compliant || result.non_compliant.length === 0)) {
+        container.innerHTML = '<p style="color: var(--text-dim, #888);">No paths to display.</p>';
+    }
+}
+
+async function filterPaths(policyId, paths) {
+    try {
+        const resp = await fetch(`${API_BASE}/api/filter-paths`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ policy_id: policyId, paths: paths }),
+        });
+        const result = await resp.json();
+        displayPrefilterResults(result);
+        return result;
+    } catch (e) {
+        console.log('Path pre-filtering failed:', e);
+        return null;
+    }
+}
+
 document.addEventListener('DOMContentLoaded', init);

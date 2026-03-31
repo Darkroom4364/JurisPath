@@ -2,19 +2,29 @@ package pathcheck
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/jurispath/jurispath/internal/policy"
+	"github.com/jurispath/jurispath/internal/security"
 	"github.com/jurispath/jurispath/pkg/model"
 )
 
 // Checker evaluates SCION paths against jurisdiction policies.
 type Checker struct {
-	policy *policy.Policy
+	policy         *policy.Policy
+	replayDetector *security.ReplayDetector
 }
 
 // NewChecker creates a path compliance checker for the given policy.
 func NewChecker(p *policy.Policy) *Checker {
 	return &Checker{policy: p}
+}
+
+// SetReplayDetector attaches a replay detector to the checker.
+// When set, path checks will also verify that the path fingerprint
+// has not been replayed.
+func (c *Checker) SetReplayDetector(rd *security.ReplayDetector) {
+	c.replayDetector = rd
 }
 
 // Check evaluates whether all hops in the path comply with the policy.
@@ -60,6 +70,16 @@ func (c *Checker) Check(path *model.SCIONPath) (*CheckResult, error) {
 				c.policy.ID, c.policy.AllowedISDs,
 			),
 		}, nil
+	}
+
+	// If a replay detector is configured, check for path replay
+	if c.replayDetector != nil {
+		if err := c.replayDetector.Check(path.Fingerprint, 0, time.Now()); err != nil {
+			return &CheckResult{
+				Compliant:      false,
+				ViolatedClause: fmt.Sprintf("path replay detected: %v", err),
+			}, nil
+		}
 	}
 
 	return &CheckResult{Compliant: true}, nil
