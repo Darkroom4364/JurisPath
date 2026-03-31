@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JurisPath — Architecture Diagram</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0e17;
+    color: #e5e7eb;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3rem;
+  }
+  h1 { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em; }
+  h2 { font-size: 1.1rem; font-weight: 600; color: #9ca3af; margin-bottom: 1rem; }
+  .subtitle { color: #9ca3af; font-size: 0.9rem; margin-top: 0.25rem; }
+  .diagram-section { width: 100%; max-width: 1100px; }
+  svg { width: 100%; height: auto; }
+  .note {
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    font-size: 0.8rem;
+    color: #9ca3af;
+    line-height: 1.6;
+    max-width: 1100px;
+  }
+</style>
+</head>
+<body>
+
+<div>
+  <h1>JurisPath Architecture</h1>
+  <p class="subtitle">Jurisdiction-Aware DLT Settlement with SCION ISD Compliance Proofs</p>
+</div>
+
+<!-- DIAGRAM 1: The Problem -->
+<div class="diagram-section">
+  <h2>1. The Problem — BGP Has No Path Guarantees</h2>
+  <svg viewBox="0 0 1000 280" xmlns="http://www.w3.org/2000/svg">
+    <!-- Swiss Bank -->
+    <rect x="30" y="100" width="160" height="80" rx="12" fill="#111827" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="110" y="135" text-anchor="middle" fill="#e5e7eb" font-size="13" font-weight="600">Swiss Bank A</text>
+    <text x="110" y="155" text-anchor="middle" fill="#9ca3af" font-size="10">CHF-EUR Settlement</text>
+
+    <!-- EU Bank -->
+    <rect x="810" y="100" width="160" height="80" rx="12" fill="#111827" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="890" y="135" text-anchor="middle" fill="#e5e7eb" font-size="13" font-weight="600">EU Bank B</text>
+    <text x="890" y="155" text-anchor="middle" fill="#9ca3af" font-size="10">Receives Settlement</text>
+
+    <!-- BGP Cloud -->
+    <ellipse cx="500" cy="60" rx="180" ry="45" fill="rgba(239,68,68,0.08)" stroke="#ef4444" stroke-width="1" stroke-dasharray="6 3"/>
+    <text x="500" y="55" text-anchor="middle" fill="#ef4444" font-size="12" font-weight="600">BGP Internet</text>
+    <text x="500" y="72" text-anchor="middle" fill="#9ca3af" font-size="10">Route unknown, unverifiable</text>
+
+    <!-- Unknown jurisdiction -->
+    <rect x="420" y="170" width="160" height="60" rx="10" fill="rgba(239,68,68,0.06)" stroke="#ef4444" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="500" y="198" text-anchor="middle" fill="#ef4444" font-size="11">Unknown Jurisdiction?</text>
+    <text x="500" y="215" text-anchor="middle" fill="#9ca3af" font-size="9">US? China? Russia?</text>
+
+    <!-- Arrows -->
+    <path d="M 190 130 Q 350 40 420 60" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="6 3" marker-end="url(#arrowRed)"/>
+    <path d="M 580 60 Q 650 40 810 130" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="6 3" marker-end="url(#arrowRed)"/>
+    <path d="M 460 60 Q 430 120 460 170" fill="none" stroke="#ef4444" stroke-width="1" stroke-dasharray="4 2" opacity="0.5"/>
+    <path d="M 540 170 Q 570 120 540 60" fill="none" stroke="#ef4444" stroke-width="1" stroke-dasharray="4 2" opacity="0.5"/>
+
+    <!-- Question marks -->
+    <text x="330" y="80" fill="#ef4444" font-size="18" font-weight="700">?</text>
+    <text x="670" y="80" fill="#ef4444" font-size="18" font-weight="700">?</text>
+
+    <!-- Label -->
+    <text x="500" y="260" text-anchor="middle" fill="#ef4444" font-size="11" font-weight="600">Neither bank nor regulator can verify the actual path</text>
+
+    <defs>
+      <marker id="arrowRed" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#ef4444"/></marker>
+    </defs>
+  </svg>
+</div>
+
+<!-- DIAGRAM 2: SCION ISDs -->
+<div class="diagram-section">
+  <h2>2. SCION — Cryptographically Verified Paths Through Trust Regions</h2>
+  <svg viewBox="0 0 1000 340" xmlns="http://www.w3.org/2000/svg">
+    <!-- ISD-CH -->
+    <rect x="30" y="40" width="280" height="240" rx="16" fill="rgba(59,130,246,0.06)" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="170" y="70" text-anchor="middle" fill="#3b82f6" font-size="14" font-weight="700">ISD-1 (Switzerland)</text>
+    <text x="170" y="88" text-anchor="middle" fill="#9ca3af" font-size="10">TRC signed by Swiss core ASes</text>
+    <!-- AS nodes -->
+    <circle cx="110" cy="160" r="30" fill="#111827" stroke="#3b82f6" stroke-width="2"/>
+    <text x="110" y="156" text-anchor="middle" fill="#e5e7eb" font-size="10" font-weight="600">AS 110</text>
+    <text x="110" y="170" text-anchor="middle" fill="#9ca3af" font-size="8">Core</text>
+    <circle cx="230" cy="200" r="28" fill="#111827" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="230" y="196" text-anchor="middle" fill="#e5e7eb" font-size="10" font-weight="600">AS 111</text>
+    <text x="230" y="210" text-anchor="middle" fill="#9ca3af" font-size="8">Validator CH</text>
+    <line x1="140" y1="165" x2="202" y2="195" stroke="#3b82f6" stroke-width="1.5"/>
+
+    <!-- ISD-EU -->
+    <rect x="370" y="40" width="280" height="240" rx="16" fill="rgba(16,185,129,0.06)" stroke="#10b981" stroke-width="1.5"/>
+    <text x="510" y="70" text-anchor="middle" fill="#10b981" font-size="14" font-weight="700">ISD-2 (European Union)</text>
+    <text x="510" y="88" text-anchor="middle" fill="#9ca3af" font-size="10">TRC signed by EU core ASes</text>
+    <circle cx="450" cy="160" r="30" fill="#111827" stroke="#10b981" stroke-width="2"/>
+    <text x="450" y="156" text-anchor="middle" fill="#e5e7eb" font-size="10" font-weight="600">AS 210</text>
+    <text x="450" y="170" text-anchor="middle" fill="#9ca3af" font-size="8">Core</text>
+    <circle cx="570" cy="200" r="28" fill="#111827" stroke="#10b981" stroke-width="1.5"/>
+    <text x="570" y="196" text-anchor="middle" fill="#e5e7eb" font-size="10" font-weight="600">AS 211</text>
+    <text x="570" y="210" text-anchor="middle" fill="#9ca3af" font-size="8">Validator EU</text>
+    <line x1="480" y1="165" x2="542" y2="195" stroke="#10b981" stroke-width="1.5"/>
+
+    <!-- ISD-X -->
+    <rect x="720" y="80" width="240" height="160" rx="16" fill="rgba(239,68,68,0.06)" stroke="#ef4444" stroke-width="1.5"/>
+    <text x="840" y="110" text-anchor="middle" fill="#ef4444" font-size="14" font-weight="700">ISD-3 (Unauthorized)</text>
+    <text x="840" y="128" text-anchor="middle" fill="#9ca3af" font-size="10">Non-compliant jurisdiction</text>
+    <circle cx="840" cy="185" r="28" fill="#111827" stroke="#ef4444" stroke-width="1.5"/>
+    <text x="840" y="181" text-anchor="middle" fill="#e5e7eb" font-size="10" font-weight="600">AS 310</text>
+    <text x="840" y="195" text-anchor="middle" fill="#9ca3af" font-size="8">Core</text>
+
+    <!-- Inter-ISD core links -->
+    <line x1="140" y1="155" x2="420" y2="155" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="6 3"/>
+    <text x="280" y="148" text-anchor="middle" fill="#60a5fa" font-size="9">core link</text>
+    <line x1="140" y1="165" x2="812" y2="185" stroke="#ef4444" stroke-width="1" stroke-dasharray="4 3" opacity="0.4"/>
+    <line x1="480" y1="165" x2="812" y2="185" stroke="#ef4444" stroke-width="1" stroke-dasharray="4 3" opacity="0.4"/>
+
+    <!-- Legend -->
+    <text x="170" y="320" fill="#3b82f6" font-size="10">Each hop carries a MAC — path is cryptographically authenticated</text>
+  </svg>
+</div>
+
+<!-- DIAGRAM 3: JurisPath Compliance Flow -->
+<div class="diagram-section">
+  <h2>3. JurisPath — The Compliance Oracle Flow</h2>
+  <svg viewBox="0 0 1000 520" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#10b981"/></marker>
+      <marker id="arrowBlue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#60a5fa"/></marker>
+      <marker id="arrowOrange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#f59e0b"/></marker>
+      <marker id="arrowRedS" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#ef4444"/></marker>
+      <marker id="arrowGray" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#6b7280"/></marker>
+    </defs>
+
+    <!-- Step 1: Settlement Request -->
+    <rect x="30" y="20" width="180" height="70" rx="10" fill="#111827" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="120" y="48" text-anchor="middle" fill="#f59e0b" font-size="11" font-weight="700">1. SETTLEMENT</text>
+    <text x="120" y="65" text-anchor="middle" fill="#9ca3af" font-size="10">Bank A → Bank B</text>
+    <text x="120" y="78" text-anchor="middle" fill="#9ca3af" font-size="9">1000 CHF → EUR</text>
+
+    <!-- Arrow to DLT -->
+    <line x1="210" y1="55" x2="280" y2="55" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrowOrange)"/>
+
+    <!-- Step 2: DLT Consensus -->
+    <rect x="290" y="15" width="200" height="80" rx="10" fill="#111827" stroke="#60a5fa" stroke-width="1.5"/>
+    <text x="390" y="40" text-anchor="middle" fill="#60a5fa" font-size="11" font-weight="700">2. DLT CONSENSUS</text>
+    <text x="390" y="58" text-anchor="middle" fill="#9ca3af" font-size="9">Propose → Vote → Commit</text>
+    <text x="390" y="72" text-anchor="middle" fill="#9ca3af" font-size="9">3 validators, majority needed</text>
+
+    <!-- Arrow to Oracle -->
+    <line x1="490" y1="55" x2="560" y2="55" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+    <text x="525" y="48" fill="#60a5fa" font-size="8">SCION</text>
+    <text x="525" y="58" fill="#60a5fa" font-size="8">path</text>
+
+    <!-- Step 3: Compliance Oracle (main box) -->
+    <rect x="570" y="0" width="400" height="200" rx="14" fill="rgba(16,185,129,0.04)" stroke="#10b981" stroke-width="2"/>
+    <text x="770" y="25" text-anchor="middle" fill="#10b981" font-size="13" font-weight="700">3. COMPLIANCE ORACLE</text>
+
+    <!-- Sub-components inside oracle -->
+    <!-- Path Checker -->
+    <rect x="590" y="40" width="165" height="55" rx="8" fill="#111827" stroke="#10b981" stroke-width="1"/>
+    <text x="672" y="60" text-anchor="middle" fill="#e5e7eb" font-size="10" font-weight="600">Path Checker</text>
+    <text x="672" y="75" text-anchor="middle" fill="#9ca3af" font-size="8">Extract hops from snet.Path</text>
+    <text x="672" y="86" text-anchor="middle" fill="#9ca3af" font-size="8">Map AS → ISD via CP-PKI</text>
+
+    <!-- Policy Engine -->
+    <rect x="590" y="105" width="165" height="50" rx="8" fill="#111827" stroke="#10b981" stroke-width="1"/>
+    <text x="672" y="125" text-anchor="middle" fill="#e5e7eb" font-size="10" font-weight="600">Policy Engine</text>
+    <text x="672" y="140" text-anchor="middle" fill="#9ca3af" font-size="8">allowed_isds: [1, 2]</text>
+    <text x="672" y="150" text-anchor="middle" fill="#9ca3af" font-size="8">mode: strict</text>
+
+    <!-- Arrow between them -->
+    <line x1="672" y1="95" x2="672" y2="105" stroke="#10b981" stroke-width="1" marker-end="url(#arrowGreen)"/>
+
+    <!-- Replay Detector -->
+    <rect x="775" y="40" width="175" height="55" rx="8" fill="#111827" stroke="#f59e0b" stroke-width="1"/>
+    <text x="862" y="60" text-anchor="middle" fill="#e5e7eb" font-size="10" font-weight="600">Replay Detector</text>
+    <text x="862" y="75" text-anchor="middle" fill="#9ca3af" font-size="8">30s validity window</text>
+    <text x="862" y="86" text-anchor="middle" fill="#9ca3af" font-size="8">Monotonic seq numbers</text>
+
+    <!-- TRC Verifier -->
+    <rect x="775" y="105" width="175" height="50" rx="8" fill="#111827" stroke="#f59e0b" stroke-width="1"/>
+    <text x="862" y="125" text-anchor="middle" fill="#e5e7eb" font-size="10" font-weight="600">TRC Verifier</text>
+    <text x="862" y="140" text-anchor="middle" fill="#9ca3af" font-size="8">Verify AS ∈ ISD via TRC</text>
+    <text x="862" y="150" text-anchor="middle" fill="#9ca3af" font-size="8">Build ISD membership proofs</text>
+
+    <!-- Decision diamond -->
+    <polygon points="770,175 810,195 770,215 730,195" fill="#111827" stroke="#10b981" stroke-width="1.5"/>
+    <text x="770" y="199" text-anchor="middle" fill="#e5e7eb" font-size="10" font-weight="600">OK?</text>
+
+    <line x1="672" y1="155" x2="672" y2="195" stroke="#10b981" stroke-width="1"/>
+    <line x1="672" y1="195" x2="730" y2="195" stroke="#10b981" stroke-width="1"/>
+
+    <!-- ═══ COMPLIANT PATH (left branch) ═══ -->
+    <!-- Arrow down from diamond -->
+    <line x1="770" y1="215" x2="770" y2="260" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+    <text x="790" y="240" fill="#10b981" font-size="9" font-weight="600">YES</text>
+
+    <!-- Receipt Generator -->
+    <rect x="670" y="270" width="200" height="70" rx="10" fill="#111827" stroke="#10b981" stroke-width="1.5"/>
+    <text x="770" y="295" text-anchor="middle" fill="#10b981" font-size="11" font-weight="700">Receipt Generator</text>
+    <text x="770" y="312" text-anchor="middle" fill="#9ca3af" font-size="9">Ed25519 sign(txID + path + seqNo)</text>
+    <text x="770" y="326" text-anchor="middle" fill="#9ca3af" font-size="9">+ ISD proofs from TRC chain</text>
+
+    <!-- Arrow to Receipt -->
+    <line x1="770" y1="340" x2="770" y2="380" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+
+    <!-- Compliance Receipt -->
+    <rect x="650" y="390" width="240" height="80" rx="10" fill="rgba(16,185,129,0.1)" stroke="#10b981" stroke-width="2"/>
+    <text x="770" y="415" text-anchor="middle" fill="#10b981" font-size="12" font-weight="700">COMPLIANCE RECEIPT</text>
+    <text x="770" y="433" text-anchor="middle" fill="#9ca3af" font-size="9">Verifiable offline against TRC</text>
+    <text x="770" y="447" text-anchor="middle" fill="#9ca3af" font-size="9">Auditor needs only public key + TRC</text>
+    <text x="770" y="461" text-anchor="middle" fill="#10b981" font-size="9">✓ Transaction proceeds</text>
+
+    <!-- ═══ VIOLATION PATH (right branch from diamond) ═══ -->
+    <line x1="810" y1="195" x2="890" y2="195" stroke="#ef4444" stroke-width="1.5"/>
+    <line x1="890" y1="195" x2="890" y2="260" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrowRedS)"/>
+    <text x="855" y="188" fill="#ef4444" font-size="9" font-weight="600">NO</text>
+
+    <!-- Violation Detector -->
+    <rect x="790" y="270" width="190" height="60" rx="10" fill="#111827" stroke="#ef4444" stroke-width="1.5"/>
+    <text x="885" y="295" text-anchor="middle" fill="#ef4444" font-size="11" font-weight="700">BLOCKED</text>
+    <text x="885" y="312" text-anchor="middle" fill="#9ca3af" font-size="9">Violation alert raised</text>
+    <text x="885" y="324" text-anchor="middle" fill="#ef4444" font-size="9">✗ Transaction rejected</text>
+
+    <!-- ═══ PERSISTENCE (bottom) ═══ -->
+    <line x1="770" y1="470" x2="770" y2="500" stroke="#6b7280" stroke-width="1" marker-end="url(#arrowGray)"/>
+    <line x1="885" y1="330" x2="885" y2="500" stroke="#6b7280" stroke-width="1" marker-end="url(#arrowGray)"/>
+
+    <!-- Audit Trail -->
+    <rect x="620" y="490" width="360" height="25" rx="6" fill="#111827" stroke="#6b7280" stroke-width="1"/>
+    <text x="800" y="507" text-anchor="middle" fill="#6b7280" font-size="10">BoltDB Audit Trail (append-only, crash-recoverable)</text>
+
+    <!-- Left side: pre-filtering -->
+    <rect x="30" y="130" width="200" height="120" rx="10" fill="#111827" stroke="#6b7280" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="130" y="155" text-anchor="middle" fill="#e5e7eb" font-size="10" font-weight="600">Pre-filtering</text>
+    <text x="130" y="170" text-anchor="middle" fill="#e5e7eb" font-size="10" font-weight="600">(Scenario C)</text>
+    <text x="130" y="190" text-anchor="middle" fill="#9ca3af" font-size="9">Query available paths</text>
+    <text x="130" y="204" text-anchor="middle" fill="#10b981" font-size="9">✓ CH → EU direct</text>
+    <text x="130" y="218" text-anchor="middle" fill="#ef4444" font-size="9">✗ CH → X → EU</text>
+    <text x="130" y="232" text-anchor="middle" fill="#ef4444" font-size="9">✗ CH → X → EU → X</text>
+
+    <text x="130" y="115" text-anchor="middle" fill="#9ca3af" font-size="9">Before sending:</text>
+    <line x1="130" y1="120" x2="130" y2="130" stroke="#6b7280" stroke-width="1" marker-end="url(#arrowGray)"/>
+
+    <!-- Threshold signing note -->
+    <rect x="30" y="310" width="200" height="80" rx="10" fill="#111827" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="130" y="335" text-anchor="middle" fill="#f59e0b" font-size="10" font-weight="600">Threshold Signing</text>
+    <text x="130" y="355" text-anchor="middle" fill="#9ca3af" font-size="9">k-of-n oracles must agree</text>
+    <text x="130" y="370" text-anchor="middle" fill="#9ca3af" font-size="9">No single point of trust</text>
+    <text x="130" y="385" text-anchor="middle" fill="#9ca3af" font-size="9">Rejects foreign keys</text>
+  </svg>
+</div>
+
+<!-- DIAGRAM 4: Receipt Verification -->
+<div class="diagram-section">
+  <h2>4. Offline Receipt Verification — What Makes This Auditable</h2>
+  <svg viewBox="0 0 1000 200" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arrowG2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#10b981"/></marker>
+    </defs>
+
+    <!-- Receipt -->
+    <rect x="30" y="30" width="200" height="140" rx="10" fill="#111827" stroke="#10b981" stroke-width="1.5"/>
+    <text x="130" y="55" text-anchor="middle" fill="#10b981" font-size="11" font-weight="700">Compliance Receipt</text>
+    <line x1="50" y1="65" x2="210" y2="65" stroke="#1f2937" stroke-width="1"/>
+    <text x="60" y="82" fill="#9ca3af" font-size="9">tx_id: tx-chf-eur-001</text>
+    <text x="60" y="96" fill="#9ca3af" font-size="9">policy: chf-eur-v1</text>
+    <text x="60" y="110" fill="#9ca3af" font-size="9">path: AS110→AS210 (ISD1→2)</text>
+    <text x="60" y="124" fill="#9ca3af" font-size="9">seq_no: 42</text>
+    <text x="60" y="138" fill="#9ca3af" font-size="9">isd_proofs: [TRC serial, chain]</text>
+    <text x="60" y="157" fill="#10b981" font-size="9" font-weight="600">signature: ed25519(above)</text>
+
+    <!-- Arrow -->
+    <line x1="230" y1="100" x2="310" y2="100" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowG2)"/>
+    <text x="270" y="92" text-anchor="middle" fill="#9ca3af" font-size="8">verify</text>
+
+    <!-- Auditor -->
+    <rect x="320" y="50" width="180" height="100" rx="10" fill="#111827" stroke="#60a5fa" stroke-width="1.5"/>
+    <text x="410" y="75" text-anchor="middle" fill="#60a5fa" font-size="11" font-weight="700">Auditor / FINMA</text>
+    <text x="410" y="95" text-anchor="middle" fill="#9ca3af" font-size="9">Has: oracle public key</text>
+    <text x="410" y="109" text-anchor="middle" fill="#9ca3af" font-size="9">Has: ISD TRCs (public)</text>
+    <text x="410" y="125" text-anchor="middle" fill="#9ca3af" font-size="9">Needs: nothing else</text>
+    <text x="410" y="141" text-anchor="middle" fill="#10b981" font-size="9" font-weight="600">Works fully offline</text>
+
+    <!-- Arrow to checks -->
+    <line x1="500" y1="100" x2="580" y2="100" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowG2)"/>
+
+    <!-- Verification steps -->
+    <rect x="590" y="20" width="380" height="160" rx="10" fill="#111827" stroke="#10b981" stroke-width="1"/>
+    <text x="780" y="45" text-anchor="middle" fill="#10b981" font-size="11" font-weight="700">Verification Steps</text>
+    <line x1="610" y1="55" x2="950" y2="55" stroke="#1f2937" stroke-width="1"/>
+    <text x="620" y="75" fill="#10b981" font-size="10">1.</text>
+    <text x="640" y="75" fill="#9ca3af" font-size="10">ed25519.Verify(pubkey, payload, sig) → valid?</text>
+    <text x="620" y="97" fill="#10b981" font-size="10">2.</text>
+    <text x="640" y="97" fill="#9ca3af" font-size="10">Each hop's AS listed in ISD's TRC? → membership proven</text>
+    <text x="620" y="119" fill="#10b981" font-size="10">3.</text>
+    <text x="640" y="119" fill="#9ca3af" font-size="10">SeqNo monotonic, timestamp within window? → not replayed</text>
+    <text x="620" y="141" fill="#10b981" font-size="10">4.</text>
+    <text x="640" y="141" fill="#9ca3af" font-size="10">All ISDs in path ⊆ policy.allowed_isds? → compliant</text>
+    <text x="780" y="168" text-anchor="middle" fill="#10b981" font-size="10" font-weight="600">If all pass → legally defensible proof of compliant routing</text>
+  </svg>
+</div>
+
+<div class="note">
+  <strong>Key insight:</strong> On normal internet (BGP), compliance is based on trust — you hope the path was correct.
+  With JurisPath on SCION, compliance is based on <em>cryptographic proof</em> — each hop is MAC-authenticated by the on-path AS,
+  the AS-to-ISD binding is rooted in TRC certificate chains, and the oracle's receipt is Ed25519-signed.
+  An auditor can verify the entire chain offline, months after the transaction, with only public keys.
+</div>
+
+</body>
+</html>
