@@ -1,0 +1,6 @@
+id: demo-mixed-v1
+name: Demo Mixed Policy
+description: Demonstration policy allowing ISD-CH, ISD-EU, and ISD-X to show violation detection
+version: 1
+allowed_isds: [1, 2, 3]
+mode: strict

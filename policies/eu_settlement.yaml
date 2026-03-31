@@ -1,0 +1,6 @@
+id: chf-eur-settlement-v1
+name: CHF-EUR Cross-Border Settlement
+description: Settlement between Swiss and EU counterparties; hops must stay within ISD-CH and ISD-EU
+version: 1
+allowed_isds: [1, 2]
+mode: strict

@@ -1,0 +1,206 @@
+:root {
+    --bg: #0a0e17;
+    --surface: #111827;
+    --border: #1f2937;
+    --text: #e5e7eb;
+    --text-dim: #9ca3af;
+    --green: #10b981;
+    --red: #ef4444;
+    --blue: #3b82f6;
+    --orange: #f59e0b;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+}
+
+header {
+    padding: 2rem;
+    border-bottom: 1px solid var(--border);
+    text-align: center;
+}
+
+header h1 {
+    font-size: 1.8rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
+.subtitle {
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    margin-top: 0.25rem;
+}
+
+main {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+section {
+    margin-bottom: 2.5rem;
+}
+
+h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* Topology SVG */
+.topology-map {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem;
+}
+
+.isd rect {
+    fill: rgba(59, 130, 246, 0.08);
+    stroke: var(--blue);
+    stroke-width: 1.5;
+}
+
+.isd.unauthorized rect {
+    fill: rgba(239, 68, 68, 0.08);
+    stroke: var(--red);
+}
+
+.isd-label {
+    font-size: 14px;
+    font-weight: 700;
+    fill: var(--text);
+}
+
+.isd-sub {
+    font-size: 11px;
+    fill: var(--text-dim);
+}
+
+.as-node {
+    fill: var(--surface);
+    stroke: var(--blue);
+    stroke-width: 2;
+}
+
+.as-node.core {
+    fill: rgba(59, 130, 246, 0.2);
+}
+
+.as-label {
+    font-size: 10px;
+    fill: var(--text-dim);
+}
+
+.oracle-box {
+    fill: rgba(16, 185, 129, 0.1);
+    stroke: var(--green);
+    stroke-width: 1.5;
+}
+
+.oracle-label {
+    font-size: 12px;
+    font-weight: 600;
+    fill: var(--green);
+}
+
+.path {
+    stroke-width: 2;
+    fill: none;
+}
+
+.path.compliant {
+    stroke: var(--green);
+    stroke-dasharray: 8 4;
+}
+
+.path.violation {
+    stroke: var(--red);
+    stroke-dasharray: 4 4;
+}
+
+/* Table */
+.table-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th, td {
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+
+th {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+td {
+    font-size: 0.85rem;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.status-badge.compliant {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--green);
+}
+
+.status-badge.violation {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--red);
+}
+
+/* Alerts */
+.alert-card {
+    background: var(--surface);
+    border: 1px solid var(--red);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.alert-card .severity {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--red);
+}
+
+.alert-card .message {
+    margin-top: 0.25rem;
+    font-size: 0.85rem;
+}
+
+#alert-list:empty::after {
+    content: "No violations detected.";
+    color: var(--text-dim);
+    font-size: 0.85rem;
+}

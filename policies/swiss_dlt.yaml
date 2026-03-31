@@ -1,0 +1,6 @@
+id: swiss-dlt-act-v1
+name: Swiss DLT Act Settlement
+description: All path hops must remain within ISD-CH (Switzerland)
+version: 1
+allowed_isds: [1]
+mode: strict

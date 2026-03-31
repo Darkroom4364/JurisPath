@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JurisPath — Compliance Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>JurisPath</h1>
+        <p class="subtitle">Jurisdiction-Aware DLT Settlement Compliance</p>
+    </header>
+
+    <main>
+        <section id="topology">
+            <h2>ISD Topology</h2>
+            <div class="topology-map">
+                <svg viewBox="0 0 600 400" id="topo-svg">
+                    <!-- ISD-CH -->
+                    <g class="isd" id="isd-ch">
+                        <rect x="20" y="120" width="160" height="160" rx="16"/>
+                        <text x="100" y="155" text-anchor="middle" class="isd-label">ISD-CH</text>
+                        <text x="100" y="175" text-anchor="middle" class="isd-sub">Switzerland</text>
+                        <circle cx="70" cy="220" r="18" class="as-node core"/>
+                        <text x="70" y="225" text-anchor="middle" class="as-label">Core</text>
+                        <circle cx="130" cy="220" r="18" class="as-node"/>
+                        <text x="130" y="225" text-anchor="middle" class="as-label">Val-1</text>
+                    </g>
+
+                    <!-- ISD-EU -->
+                    <g class="isd" id="isd-eu">
+                        <rect x="420" y="120" width="160" height="160" rx="16"/>
+                        <text x="500" y="155" text-anchor="middle" class="isd-label">ISD-EU</text>
+                        <text x="500" y="175" text-anchor="middle" class="isd-sub">European Union</text>
+                        <circle cx="470" cy="220" r="18" class="as-node core"/>
+                        <text x="470" y="225" text-anchor="middle" class="as-label">Core</text>
+                        <circle cx="530" cy="220" r="18" class="as-node"/>
+                        <text x="530" y="225" text-anchor="middle" class="as-label">Val-2</text>
+                    </g>
+
+                    <!-- ISD-X -->
+                    <g class="isd unauthorized" id="isd-x">
+                        <rect x="220" y="280" width="160" height="100" rx="16"/>
+                        <text x="300" y="315" text-anchor="middle" class="isd-label">ISD-X</text>
+                        <text x="300" y="335" text-anchor="middle" class="isd-sub">Unauthorized</text>
+                        <circle cx="300" cy="360" r="14" class="as-node"/>
+                        <text x="300" y="364" text-anchor="middle" class="as-label">AS</text>
+                    </g>
+
+                    <!-- Compliance Oracle -->
+                    <g id="oracle">
+                        <rect x="230" y="30" width="140" height="50" rx="10" class="oracle-box"/>
+                        <text x="300" y="60" text-anchor="middle" class="oracle-label">Compliance Oracle</text>
+                    </g>
+
+                    <!-- Paths -->
+                    <line x1="180" y1="200" x2="420" y2="200" class="path compliant" id="path-direct"/>
+                    <path d="M 180 240 Q 300 320 420 240" class="path violation" id="path-via-x" style="display:none"/>
+                </svg>
+            </div>
+        </section>
+
+        <section id="transactions">
+            <h2>Recent Transactions</h2>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>TX ID</th>
+                            <th>Policy</th>
+                            <th>Status</th>
+                            <th>Details</th>
+                            <th>Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tx-body"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="alerts">
+            <h2>Violation Alerts</h2>
+            <div id="alert-list"></div>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
