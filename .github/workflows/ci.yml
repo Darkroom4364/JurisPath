@@ -51,9 +51,9 @@ jobs:
         run: go vet ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.1
+          version: v7
 
       - name: Check go mod tidy
         run: |
