@@ -3,6 +3,7 @@ package scion
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 
@@ -56,6 +57,17 @@ func NewSCIONNetwork(ctx context.Context, daemonAddr string) (*snet.SCIONNetwork
 	}
 
 	return network, localIA, nil
+}
+
+// ConnectDaemon connects to the SCION daemon at the given address and returns
+// a PathExtractor backed by the live daemon, plus a Closer for the connection.
+func ConnectDaemon(ctx context.Context, daemonAddr string) (PathExtractor, io.Closer, error) {
+	svc := daemon.NewService(daemonAddr)
+	conn, err := svc.Connect(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("connecting to SCION daemon at %s: %w", daemonAddr, err)
+	}
+	return NewSnetPathExtractor(conn), conn, nil
 }
 
 // Dial opens a SCION/UDP connection from localAddr to remoteAddr using the

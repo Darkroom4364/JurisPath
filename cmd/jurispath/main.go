@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/scionproto/scion/pkg/daemon"
-
 	"github.com/jurispath/jurispath/config"
 	"github.com/jurispath/jurispath/internal/api"
 	"github.com/jurispath/jurispath/internal/dlt"
@@ -40,14 +38,12 @@ func main() {
 	// Connect to SCION daemon when configured; fall back to mock for dev/test.
 	var extractor scion.PathExtractor
 	if cfg.SCIONDaemonAddr != "" {
-		ctx := context.Background()
-		svc := daemon.NewService(cfg.SCIONDaemonAddr)
-		conn, err := svc.Connect(ctx)
+		ext, closer, err := scion.ConnectDaemon(context.Background(), cfg.SCIONDaemonAddr)
 		if err != nil {
-			log.Fatalf("connecting to SCION daemon at %s: %v", cfg.SCIONDaemonAddr, err)
+			log.Fatalf("SCION daemon: %v", err)
 		}
-		defer conn.Close()
-		extractor = scion.NewSnetPathExtractor(conn)
+		defer closer.Close()
+		extractor = ext
 		log.Printf("using real SCION path extractor (daemon: %s)", cfg.SCIONDaemonAddr)
 	} else {
 		extractor = &scion.MockPathExtractor{}

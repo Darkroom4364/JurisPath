@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 // Config holds application configuration.
@@ -21,7 +22,7 @@ func Load() *Config {
 		PolicyDir:       envOr("JURISPATH_POLICY_DIR", "policies"),
 		DashboardDir:    envOr("JURISPATH_DASHBOARD_DIR", "dashboard"),
 		DataDir:         envOr("JURISPATH_DATA_DIR", "data/"),
-		SCIONDaemonAddr: os.Getenv("SCION_DAEMON_ADDR"),
+		SCIONDaemonAddr: strings.TrimSpace(os.Getenv("SCION_DAEMON_ADDR")),
 	}
 }
 

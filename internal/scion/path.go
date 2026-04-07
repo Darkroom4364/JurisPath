@@ -81,7 +81,7 @@ func (e *SnetPathExtractor) ExtractHopsFromSnetPath(p snet.Path) ([]model.ASHop,
 		hops = append(hops, model.ASHop{
 			IA:  iaStr,
 			ISD: uint16(ia.ISD()),
-			AS:  fmt.Sprintf("%s", ia.AS()),
+			AS:  ia.AS().String(),
 		})
 	}
 
@@ -93,19 +93,17 @@ func (e *SnetPathExtractor) ExtractHopsFromSnetPath(p snet.Path) ([]model.ASHop,
 }
 
 // BuildSCIONPathFromSnet constructs a model.SCIONPath from a real snet.Path.
+// It uses SerializeSnetPath for the Raw field so that fingerprints are
+// consistent with paths decoded via BuildSCIONPath + ExtractHops.
 func BuildSCIONPathFromSnet(extractor *SnetPathExtractor, p snet.Path) (*model.SCIONPath, error) {
 	hops, err := extractor.ExtractHopsFromSnetPath(p)
 	if err != nil {
 		return nil, fmt.Errorf("extracting hops from snet path: %w", err)
 	}
 
-	// Build a deterministic raw representation for fingerprinting.
-	// We serialize the hop sequence since the DataplanePath interface
-	// does not expose raw bytes directly.
-	var raw []byte
-	for _, h := range hops {
-		raw = append(raw, []byte(h.IA)...)
-		raw = append(raw, '/')
+	raw, err := SerializeSnetPath(p)
+	if err != nil {
+		return nil, fmt.Errorf("serializing snet path: %w", err)
 	}
 
 	return &model.SCIONPath{
