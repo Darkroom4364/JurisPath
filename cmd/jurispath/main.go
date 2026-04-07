@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"path/filepath"
+
+	"github.com/scionproto/scion/pkg/daemon"
 
 	"github.com/jurispath/jurispath/config"
 	"github.com/jurispath/jurispath/internal/api"
@@ -34,9 +37,22 @@ func main() {
 	}
 	log.Printf("oracle public key: %x", gen.PublicKey())
 
-	// Use mock path extractor for now; swap to real snet extractor when
-	// running on a SCION network
-	extractor := &scion.MockPathExtractor{}
+	// Connect to SCION daemon when configured; fall back to mock for dev/test.
+	var extractor scion.PathExtractor
+	if cfg.SCIONDaemonAddr != "" {
+		ctx := context.Background()
+		svc := daemon.NewService(cfg.SCIONDaemonAddr)
+		conn, err := svc.Connect(ctx)
+		if err != nil {
+			log.Fatalf("connecting to SCION daemon at %s: %v", cfg.SCIONDaemonAddr, err)
+		}
+		defer conn.Close()
+		extractor = scion.NewSnetPathExtractor(conn)
+		log.Printf("using real SCION path extractor (daemon: %s)", cfg.SCIONDaemonAddr)
+	} else {
+		extractor = &scion.MockPathExtractor{}
+		log.Print("WARNING: using mock path extractor (set SCION_DAEMON_ADDR for production)")
+	}
 
 	// Initialize DLT ledger with three validators (one per ISD)
 	validators := []dlt.ValidatorState{

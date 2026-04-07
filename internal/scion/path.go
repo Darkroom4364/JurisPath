@@ -46,11 +46,15 @@ func NewSnetPathExtractor(conn daemon.Connector) *SnetPathExtractor {
 	return &SnetPathExtractor{Conn: conn}
 }
 
-// ExtractHops implements PathExtractor for raw bytes. This is a fallback that
-// treats raw bytes as a JSON-encoded mock path for backward compatibility.
-// For real SCION paths, use ExtractHopsFromSnetPath instead.
+// ExtractHops implements PathExtractor for raw bytes. It first tries to
+// decode the binary path metadata format (produced by SerializeSnetPath).
+// If that fails, it falls back to JSON-encoded hops for backward
+// compatibility with dev/test clients.
 func (e *SnetPathExtractor) ExtractHops(rawPath []byte) ([]model.ASHop, error) {
-	// Delegate to mock-style JSON decoding as a fallback for raw bytes.
+	if len(rawPath) >= 3 && rawPath[0] == pathMetaVersion {
+		return decodeSnetPathMeta(rawPath)
+	}
+	// Fallback: JSON-encoded mock format for backward compatibility.
 	mock := &MockPathExtractor{}
 	return mock.ExtractHops(rawPath)
 }

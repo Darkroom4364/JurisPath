@@ -7,19 +7,21 @@ import (
 
 // Config holds application configuration.
 type Config struct {
-	ListenAddr   string
-	PolicyDir    string
-	DashboardDir string
-	DataDir      string
+	ListenAddr       string
+	PolicyDir        string
+	DashboardDir     string
+	DataDir          string
+	SCIONDaemonAddr  string // SCION daemon address (empty = mock mode)
 }
 
 // Load reads configuration from environment variables with defaults.
 func Load() *Config {
 	return &Config{
-		ListenAddr:   envOr("JURISPATH_LISTEN", ":8080"),
-		PolicyDir:    envOr("JURISPATH_POLICY_DIR", "policies"),
-		DashboardDir: envOr("JURISPATH_DASHBOARD_DIR", "dashboard"),
-		DataDir:      envOr("JURISPATH_DATA_DIR", "data/"),
+		ListenAddr:      envOr("JURISPATH_LISTEN", ":8080"),
+		PolicyDir:       envOr("JURISPATH_POLICY_DIR", "policies"),
+		DashboardDir:    envOr("JURISPATH_DASHBOARD_DIR", "dashboard"),
+		DataDir:         envOr("JURISPATH_DATA_DIR", "data/"),
+		SCIONDaemonAddr: os.Getenv("SCION_DAEMON_ADDR"),
 	}
 }
 
