@@ -11,6 +11,7 @@ type Config struct {
 	PolicyDir    string
 	DashboardDir string
 	DataDir      string
+	LogLevel     string // "debug", "info", "warn", "error"
 }
 
 // Load reads configuration from environment variables with defaults.
@@ -20,6 +21,7 @@ func Load() *Config {
 		PolicyDir:    envOr("JURISPATH_POLICY_DIR", "policies"),
 		DashboardDir: envOr("JURISPATH_DASHBOARD_DIR", "dashboard"),
 		DataDir:      envOr("JURISPATH_DATA_DIR", "data/"),
+		LogLevel:     envOr("JURISPATH_LOG_LEVEL", "info"),
 	}
 }
 

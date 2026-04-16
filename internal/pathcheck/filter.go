@@ -1,6 +1,8 @@
 package pathcheck
 
 import (
+	"log/slog"
+
 	"github.com/jurispath/jurispath/internal/policy"
 	"github.com/jurispath/jurispath/pkg/model"
 )
@@ -25,6 +27,8 @@ type FilterResult struct {
 // FilterPaths evaluates each candidate path against the policy and separates
 // them into compliant and non-compliant sets.
 func (f *PathFilter) FilterPaths(paths []model.SCIONPath) *FilterResult {
+	slog.Debug("filtering candidate paths", "policy_id", f.policy.ID, "candidates", len(paths))
+
 	result := &FilterResult{
 		Compliant:    []model.SCIONPath{},
 		NonCompliant: []model.SCIONPath{},
@@ -43,6 +47,7 @@ func (f *PathFilter) FilterPaths(paths []model.SCIONPath) *FilterResult {
 		}
 	}
 
+	slog.Debug("path filter results", "policy_id", f.policy.ID, "compliant", len(result.Compliant), "non_compliant", len(result.NonCompliant))
 	return result
 }
 

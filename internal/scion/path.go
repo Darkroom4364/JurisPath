@@ -3,6 +3,7 @@ package scion
 import (
 	"crypto/sha256"
 	"fmt"
+	"log/slog"
 
 	"github.com/scionproto/scion/pkg/daemon"
 	"github.com/scionproto/scion/pkg/snet"
@@ -24,14 +25,18 @@ func Fingerprint(raw []byte) string {
 
 // BuildSCIONPath constructs a SCIONPath from raw bytes using the given extractor.
 func BuildSCIONPath(extractor PathExtractor, raw []byte) (*model.SCIONPath, error) {
+	slog.Debug("building SCION path from raw bytes", "raw_len", len(raw))
 	hops, err := extractor.ExtractHops(raw)
 	if err != nil {
+		slog.Error("hop extraction failed", "raw_len", len(raw), "error", err)
 		return nil, fmt.Errorf("extracting hops: %w", err)
 	}
+	fp := Fingerprint(raw)
+	slog.Debug("SCION path built", "hops", len(hops), "fingerprint", fp)
 	return &model.SCIONPath{
 		Raw:         raw,
 		Hops:        hops,
-		Fingerprint: Fingerprint(raw),
+		Fingerprint: fp,
 	}, nil
 }
 
@@ -60,8 +65,11 @@ func (e *SnetPathExtractor) ExtractHops(rawPath []byte) ([]model.ASHop, error) {
 func (e *SnetPathExtractor) ExtractHopsFromSnetPath(p snet.Path) ([]model.ASHop, error) {
 	meta := p.Metadata()
 	if meta == nil {
+		slog.Error("snet path has nil metadata")
 		return nil, fmt.Errorf("path metadata is nil")
 	}
+
+	slog.Debug("extracting hops from snet path", "interfaces", len(meta.Interfaces))
 
 	seen := make(map[string]bool)
 	var hops []model.ASHop
@@ -82,9 +90,11 @@ func (e *SnetPathExtractor) ExtractHopsFromSnetPath(p snet.Path) ([]model.ASHop,
 	}
 
 	if len(hops) == 0 {
+		slog.Warn("no hops found in path metadata")
 		return nil, fmt.Errorf("no hops found in path metadata")
 	}
 
+	slog.Debug("snet path hops extracted", "count", len(hops))
 	return hops, nil
 }
 

@@ -2,6 +2,7 @@ package dlt
 
 import (
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -67,6 +68,7 @@ func (l *Ledger) SubmitTransaction(tx *Transaction) error {
 	tx.Timestamp = time.Now()
 	l.pending[tx.ID] = tx
 	l.allTxs = append(l.allTxs, tx)
+	slog.Debug("transaction submitted to pending pool", "tx_id", tx.ID, "from", tx.From, "to", tx.To, "amount", tx.Amount, "currency", tx.Currency)
 	return nil
 }
 
@@ -163,6 +165,7 @@ func (l *Ledger) Commit(msg *ConsensusMessage) error {
 	tx.Status = TxConfirmed
 	delete(l.pending, tx.ID)
 	l.confirmed[tx.ID] = tx
+	slog.Debug("transaction committed to ledger", "tx_id", tx.ID, "from", tx.From, "to", tx.To, "amount", tx.Amount, "currency", tx.Currency)
 	return nil
 }
 

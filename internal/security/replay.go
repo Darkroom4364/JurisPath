@@ -2,6 +2,7 @@ package security
 
 import (
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -51,14 +52,18 @@ func (rd *ReplayDetector) Check(fingerprint string, seqNo uint64, timestamp time
 
 	now := time.Now()
 
+	slog.Debug("replay check", "fingerprint", fingerprint, "seq_no", seqNo)
+
 	// Check timestamp validity window
 	if now.Sub(timestamp) > rd.window {
+		slog.Warn("message expired", "fingerprint", fingerprint, "age", now.Sub(timestamp), "window", rd.window)
 		return fmt.Errorf("message expired: timestamp %v is outside validity window of %v", timestamp, rd.window)
 	}
 
 	// Check for duplicate fingerprint+seqNo (replay)
 	if seqNos, ok := rd.seen[fingerprint]; ok {
 		if _, exists := seqNos[seqNo]; exists {
+			slog.Warn("replay detected", "fingerprint", fingerprint, "seq_no", seqNo)
 			return fmt.Errorf("replay detected: fingerprint %q with seqNo %d already seen", fingerprint, seqNo)
 		}
 	}
@@ -66,6 +71,7 @@ func (rd *ReplayDetector) Check(fingerprint string, seqNo uint64, timestamp time
 	// Check monotonically increasing seqNo per source
 	if last, ok := rd.lastSeqNo[fingerprint]; ok {
 		if seqNo <= last {
+			slog.Warn("out-of-order sequence number", "fingerprint", fingerprint, "got", seqNo, "last", last)
 			return fmt.Errorf("out-of-order seqNo: got %d, last seen %d for fingerprint %q", seqNo, last, fingerprint)
 		}
 	}

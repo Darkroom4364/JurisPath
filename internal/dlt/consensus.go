@@ -1,5 +1,7 @@
 package dlt
 
+import "log/slog"
+
 // ConsensusEngine orchestrates a simple 2-phase consensus protocol
 // (propose -> vote -> commit) across a set of validators. Currently runs
 // locally in a single process; the SCION networking layer will be plugged
@@ -24,6 +26,8 @@ func NewConsensusEngine(ledger *Ledger, validators []ValidatorState) *ConsensusE
 //  3. All validators vote on the proposal.
 //  4. If a majority votes yes, the transaction is committed.
 func (ce *ConsensusEngine) RunRound(tx *Transaction) (*ConsensusResult, error) {
+	slog.Debug("starting consensus round", "tx_id", tx.ID, "from", tx.From, "to", tx.To, "amount", tx.Amount, "currency", tx.Currency)
+
 	// Step 1: submit to pending pool.
 	if err := ce.ledger.SubmitTransaction(tx); err != nil {
 		return &ConsensusResult{
@@ -43,6 +47,7 @@ func (ce *ConsensusEngine) RunRound(tx *Transaction) (*ConsensusResult, error) {
 	}
 
 	ce.currentRound = proposal.Round
+	slog.Debug("block proposed", "tx_id", tx.ID, "round", proposal.Round, "proposer", proposer)
 
 	// Step 3: collect votes from all validators.
 	yesVotes := 0
@@ -57,6 +62,8 @@ func (ce *ConsensusEngine) RunRound(tx *Transaction) (*ConsensusResult, error) {
 			yesVotes++
 		}
 	}
+
+	slog.Debug("votes collected", "tx_id", tx.ID, "yes", yesVotes, "total", totalVotes)
 
 	// Step 4: commit if majority.
 	majority := totalVotes/2 + 1
@@ -75,6 +82,7 @@ func (ce *ConsensusEngine) RunRound(tx *Transaction) (*ConsensusResult, error) {
 				TxID:      tx.ID,
 			}, err
 		}
+		slog.Info("transaction committed", "tx_id", tx.ID, "round", proposal.Round, "votes", yesVotes)
 		return &ConsensusResult{
 			Confirmed: true,
 			Round:     proposal.Round,
@@ -84,6 +92,7 @@ func (ce *ConsensusEngine) RunRound(tx *Transaction) (*ConsensusResult, error) {
 	}
 
 	// Not enough votes — reject the transaction.
+	slog.Warn("transaction rejected — insufficient votes", "tx_id", tx.ID, "yes", yesVotes, "needed", majority)
 	tx.Status = TxRejected
 	return &ConsensusResult{
 		Confirmed: false,
