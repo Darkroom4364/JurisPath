@@ -1,7 +1,7 @@
 package violation
 
 import (
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -34,8 +34,10 @@ func (d *Detector) Record(txID, policyID, violatedClause string, path *model.SCI
 		Timestamp:      time.Now().UTC(),
 	}
 
+	slog.Debug("recording violation", "violation_id", v.ID, "tx_id", txID, "severity", v.Severity, "offending_hops", len(offending))
+
 	if err := d.store.Append(v); err != nil {
-		log.Printf("ERROR: persisting violation %s: %v", v.ID, err)
+		slog.Error("failed to persist violation", "violation_id", v.ID, "error", err)
 	}
 
 	d.mu.Lock()
@@ -48,6 +50,7 @@ func (d *Detector) Record(txID, policyID, violatedClause string, path *model.SCI
 		select {
 		case ch <- v:
 		default:
+			slog.Warn("dropping violation event for slow listener", "violation_id", v.ID)
 		}
 	}
 
@@ -60,6 +63,7 @@ func (d *Detector) Subscribe() chan *model.Violation {
 	d.mu.Lock()
 	d.listeners = append(d.listeners, ch)
 	d.mu.Unlock()
+	slog.Debug("new violation subscriber registered", "total_listeners", len(d.listeners))
 	return ch
 }
 

@@ -2,6 +2,7 @@ package scion
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/scionproto/scion/pkg/addr"
 	"github.com/scionproto/scion/pkg/daemon"
@@ -20,13 +21,22 @@ func NewPathQuerier(conn daemon.Connector) *PathQuerier {
 
 // QueryPaths requests paths from the SCION daemon between src and dst.
 func (q *PathQuerier) QueryPaths(ctx context.Context, dst, src addr.IA) ([]snet.Path, error) {
-	return q.Conn.Paths(ctx, dst, src, daemon.PathReqFlags{})
+	slog.Debug("querying SCION paths", "src", src, "dst", dst)
+	paths, err := q.Conn.Paths(ctx, dst, src, daemon.PathReqFlags{})
+	if err != nil {
+		slog.Error("path query failed", "src", src, "dst", dst, "error", err)
+		return nil, err
+	}
+	slog.Debug("paths received", "src", src, "dst", dst, "count", len(paths))
+	return paths, nil
 }
 
 // FilterCompliant returns only those paths where every hop's ISD is in the
 // allowed set. This implements Scenario C path pre-filtering: before sending
 // traffic, discard any path that traverses a disallowed jurisdiction.
 func (q *PathQuerier) FilterCompliant(paths []snet.Path, allowedISDs []uint16) []snet.Path {
+	slog.Debug("filtering compliant paths", "total", len(paths), "allowed_isds", allowedISDs)
+
 	allowed := make(map[uint16]bool, len(allowedISDs))
 	for _, isd := range allowedISDs {
 		allowed[isd] = true
@@ -36,6 +46,7 @@ func (q *PathQuerier) FilterCompliant(paths []snet.Path, allowedISDs []uint16) [
 	for _, p := range paths {
 		meta := p.Metadata()
 		if meta == nil {
+			slog.Debug("skipping path with nil metadata")
 			continue
 		}
 		ok := true
@@ -49,5 +60,6 @@ func (q *PathQuerier) FilterCompliant(paths []snet.Path, allowedISDs []uint16) [
 			compliant = append(compliant, p)
 		}
 	}
+	slog.Debug("path filtering complete", "compliant", len(compliant), "rejected", len(paths)-len(compliant))
 	return compliant
 }

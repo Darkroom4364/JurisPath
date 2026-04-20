@@ -3,6 +3,7 @@ package scion
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/jurispath/jurispath/pkg/model"
 )
@@ -12,10 +13,13 @@ type MockPathExtractor struct{}
 
 // ExtractHops parses hops from JSON-encoded raw bytes (for testing/demo).
 func (m *MockPathExtractor) ExtractHops(rawPath []byte) ([]model.ASHop, error) {
+	slog.Debug("mock path extractor decoding hops", "raw_len", len(rawPath))
 	var hops []model.ASHop
 	if err := json.Unmarshal(rawPath, &hops); err != nil {
+		slog.Error("mock path decode failed", "error", err)
 		return nil, fmt.Errorf("mock path decode: %w", err)
 	}
+	slog.Debug("mock path decoded", "hops", len(hops))
 	return hops, nil
 }
 

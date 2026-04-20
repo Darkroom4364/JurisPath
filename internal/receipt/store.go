@@ -1,6 +1,7 @@
 package receipt
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -11,8 +12,9 @@ import (
 )
 
 var (
-	receiptsBucket   = []byte("receipts")
+	receiptsBucket     = []byte("receipts")
 	receiptsByTxBucket = []byte("receipts_by_tx")
+	seqBucket          = []byte("seq")
 )
 
 // Store is the interface for receipt persistence.
@@ -22,6 +24,8 @@ type Store interface {
 	GetByID(id string) (*model.ComplianceReceipt, error)
 	List() ([]*model.ComplianceReceipt, error)
 	Count() (int, error)
+	Last() (*model.ComplianceReceipt, error)
+	ListRange(fromSeq, toSeq uint64) ([]*model.ComplianceReceipt, error)
 }
 
 // MemoryStore is an in-memory receipt store for testing.
@@ -75,6 +79,27 @@ func (s *MemoryStore) Count() (int, error) {
 	return len(s.receipts), nil
 }
 
+func (s *MemoryStore) Last() (*model.ComplianceReceipt, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.receipts) == 0 {
+		return nil, nil
+	}
+	return s.receipts[len(s.receipts)-1], nil
+}
+
+func (s *MemoryStore) ListRange(fromSeq, toSeq uint64) ([]*model.ComplianceReceipt, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var results []*model.ComplianceReceipt
+	for _, r := range s.receipts {
+		if r.SeqNo >= fromSeq && r.SeqNo <= toSeq {
+			results = append(results, r)
+		}
+	}
+	return results, nil
+}
+
 // BoltStore is a persistent receipt store backed by BoltDB.
 type BoltStore struct {
 	db *bolt.DB
@@ -93,13 +118,47 @@ func NewBoltStore(dbPath string) (*BoltStore, error) {
 		if _, err := tx.CreateBucketIfNotExists(receiptsByTxBucket); err != nil {
 			return err
 		}
+		if _, err := tx.CreateBucketIfNotExists(seqBucket); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("creating buckets: %w", err)
 	}
-	return &BoltStore{db: db}, nil
+	s := &BoltStore{db: db}
+	if err := s.backfillSeqBucket(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("backfilling seq bucket: %w", err)
+	}
+	return s, nil
+}
+
+func (s *BoltStore) backfillSeqBucket() error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		seq := tx.Bucket(seqBucket)
+		if seq.Stats().KeyN > 0 {
+			return nil // already populated
+		}
+		receipts := tx.Bucket(receiptsBucket)
+		if receipts == nil {
+			return nil
+		}
+		c := receipts.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var r model.ComplianceReceipt
+			if err := json.Unmarshal(v, &r); err != nil {
+				continue
+			}
+			seqKey := make([]byte, 8)
+			binary.BigEndian.PutUint64(seqKey, r.SeqNo)
+			if err := seq.Put(seqKey, k); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // Close closes the underlying BoltDB.
@@ -116,7 +175,16 @@ func (s *BoltStore) Append(r *model.ComplianceReceipt) error {
 		if err := tx.Bucket(receiptsBucket).Put([]byte(r.ID), data); err != nil {
 			return err
 		}
-		return tx.Bucket(receiptsByTxBucket).Put([]byte(r.TransactionID), []byte(r.ID))
+		if err := tx.Bucket(receiptsByTxBucket).Put([]byte(r.TransactionID), []byte(r.ID)); err != nil {
+			return err
+		}
+		seqKey := make([]byte, 8)
+		binary.BigEndian.PutUint64(seqKey, r.SeqNo)
+		seq := tx.Bucket(seqBucket)
+		if err := seq.Put(seqKey, []byte(r.ID)); err != nil {
+			return err
+		}
+		return nil
 	})
 }
 
@@ -182,4 +250,58 @@ func (s *BoltStore) Count() (int, error) {
 		return nil
 	})
 	return count, err
+}
+
+func (s *BoltStore) Last() (*model.ComplianceReceipt, error) {
+	var receipt *model.ComplianceReceipt
+	err := s.db.View(func(tx *bolt.Tx) error {
+		seq := tx.Bucket(seqBucket)
+		c := seq.Cursor()
+		_, idBytes := c.Last()
+		if idBytes == nil {
+			return nil // empty
+		}
+		receipts := tx.Bucket(receiptsBucket)
+		data := receipts.Get(idBytes)
+		if data == nil {
+			return nil
+		}
+		var r model.ComplianceReceipt
+		if err := json.Unmarshal(data, &r); err != nil {
+			return err
+		}
+		receipt = &r
+		return nil
+	})
+	return receipt, err
+}
+
+func (s *BoltStore) ListRange(fromSeq, toSeq uint64) ([]*model.ComplianceReceipt, error) {
+	var results []*model.ComplianceReceipt
+	err := s.db.View(func(tx *bolt.Tx) error {
+		seq := tx.Bucket(seqBucket)
+		receipts := tx.Bucket(receiptsBucket)
+
+		startKey := make([]byte, 8)
+		binary.BigEndian.PutUint64(startKey, fromSeq)
+
+		c := seq.Cursor()
+		for k, idBytes := c.Seek(startKey); k != nil; k, idBytes = c.Next() {
+			seqNo := binary.BigEndian.Uint64(k)
+			if seqNo > toSeq {
+				break
+			}
+			data := receipts.Get(idBytes)
+			if data == nil {
+				continue
+			}
+			var r model.ComplianceReceipt
+			if err := json.Unmarshal(data, &r); err != nil {
+				return err
+			}
+			results = append(results, &r)
+		}
+		return nil
+	})
+	return results, err
 }

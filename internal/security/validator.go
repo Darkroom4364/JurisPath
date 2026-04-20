@@ -1,6 +1,8 @@
 package security
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"time"
 
@@ -59,16 +61,7 @@ func (rv *ReceiptValidator) ValidateReceiptChain(receipts []*model.ComplianceRec
 	}
 
 	for i, r := range receipts {
-		// Verify each receipt's signature
-		valid, err := receipt.Verify(r)
-		if err != nil {
-			return fmt.Errorf("receipt %d (%s) signature error: %w", i, r.ID, err)
-		}
-		if !valid {
-			return fmt.Errorf("receipt %d (%s) has invalid signature", i, r.ID)
-		}
-
-		// Check consecutive seqNos (starting from second receipt)
+		// Check consecutive seqNos and hash chain (starting from second receipt)
 		if i > 0 {
 			prev := receipts[i-1]
 			if r.SeqNo != prev.SeqNo+1 {
@@ -85,6 +78,26 @@ func (rv *ReceiptValidator) ValidateReceiptChain(receipts []*model.ComplianceRec
 					i,
 				)
 			}
+
+			// Verify hash chain — PreviousHash should equal sha256(prev.Signature)
+			if r.PreviousHash != nil {
+				expectedHash := sha256.Sum256(prev.Signature)
+				if !bytes.Equal(r.PreviousHash, expectedHash[:]) {
+					return fmt.Errorf(
+						"receipt chain hash mismatch at index %d: expected %x, got %x",
+						i, expectedHash[:], r.PreviousHash,
+					)
+				}
+			}
+		}
+
+		// Verify each receipt's signature
+		valid, err := receipt.Verify(r)
+		if err != nil {
+			return fmt.Errorf("receipt %d (%s) signature error: %w", i, r.ID, err)
+		}
+		if !valid {
+			return fmt.Errorf("receipt %d (%s) has invalid signature", i, r.ID)
 		}
 	}
 

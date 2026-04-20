@@ -1,12 +1,14 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jurispath/jurispath/config"
 	"github.com/jurispath/jurispath/internal/api"
+	"github.com/jurispath/jurispath/internal/audit"
 	"github.com/jurispath/jurispath/internal/dlt"
 	"github.com/jurispath/jurispath/internal/policy"
 	"github.com/jurispath/jurispath/internal/receipt"
@@ -16,27 +18,51 @@ import (
 
 func main() {
 	cfg := config.Load()
-	if err := cfg.Validate(); err != nil {
-		log.Fatalf("config error: %v", err)
+
+	// Initialize structured logger
+	var level slog.Level
+	switch strings.ToLower(cfg.LogLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn", "warning":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
 	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	slog.SetDefault(logger)
+
+	if err := cfg.Validate(); err != nil {
+		slog.Error("config validation failed", "error", err)
+		os.Exit(1)
+	}
+	slog.Debug("configuration loaded", "listen", cfg.ListenAddr, "policy_dir", cfg.PolicyDir, "data_dir", cfg.DataDir, "log_level", cfg.LogLevel)
 
 	// Load jurisdiction policies
 	policies, err := policy.LoadAllFromDir(cfg.PolicyDir)
 	if err != nil {
-		log.Fatalf("loading policies: %v", err)
+		slog.Error("failed to load policies", "dir", cfg.PolicyDir, "error", err)
+		os.Exit(1)
 	}
-	log.Printf("loaded %d policies", len(policies))
+	slog.Info("policies loaded", "count", len(policies))
+	for _, p := range policies {
+		slog.Debug("policy registered", "id", p.ID, "mode", p.Mode, "allowed_isds", p.AllowedISDs)
+	}
 
 	// Initialize receipt generator with fresh Ed25519 key pair
-	gen, err := receipt.NewGenerator()
+	gen, err := receipt.NewGeneratorFromFile(cfg.OracleKeyPath)
 	if err != nil {
-		log.Fatalf("creating receipt generator: %v", err)
+		slog.Error("failed to create receipt generator", "error", err)
+		os.Exit(1)
 	}
-	log.Printf("oracle public key: %x", gen.PublicKey())
+	slog.Info("receipt generator initialized", "public_key", gen.PublicKey())
 
 	// Use mock path extractor for now; swap to real snet extractor when
 	// running on a SCION network
 	extractor := &scion.MockPathExtractor{}
+	slog.Warn("using mock path extractor — not connected to SCION daemon")
 
 	// Initialize DLT ledger with three validators (one per ISD)
 	validators := []dlt.ValidatorState{
@@ -58,29 +84,51 @@ func main() {
 	}
 	ledger := dlt.NewLedger(validators)
 	consensus := dlt.NewConsensusEngine(ledger, validators)
-	log.Printf("DLT ledger initialized with %d validators", len(validators))
+	slog.Info("DLT ledger initialized", "validators", len(validators))
 
 	// Ensure data directory exists
 	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
-		log.Fatalf("creating data dir: %v", err)
+		slog.Error("failed to create data directory", "path", cfg.DataDir, "error", err)
+		os.Exit(1)
 	}
 
 	// Initialize persistent stores
 	receiptStore, err := receipt.NewBoltStore(filepath.Join(cfg.DataDir, "receipts.db"))
 	if err != nil {
-		log.Fatalf("opening receipt store: %v", err)
+		slog.Error("failed to open receipt store", "error", err)
+		os.Exit(1)
 	}
 	defer receiptStore.Close()
+	slog.Debug("receipt store opened", "path", filepath.Join(cfg.DataDir, "receipts.db"))
+
+	if err := gen.SeedChain(receiptStore); err != nil {
+		slog.Error("failed to seed receipt chain", "error", err)
+		os.Exit(1)
+	}
 
 	violationStore, err := violation.NewBoltViolationStore(filepath.Join(cfg.DataDir, "violations.db"))
 	if err != nil {
-		log.Fatalf("opening violation store: %v", err)
+		slog.Error("failed to open violation store", "error", err)
+		os.Exit(1)
 	}
 	defer violationStore.Close()
+	slog.Debug("violation store opened", "path", filepath.Join(cfg.DataDir, "violations.db"))
 
 	detector := violation.NewDetector(violationStore)
 
+	auditLog, err := audit.NewAuditLog(filepath.Join(cfg.DataDir, "audit.db"))
+	if err != nil {
+		slog.Error("failed to open audit log", "error", err)
+		os.Exit(1)
+	}
+	defer auditLog.Close()
+	slog.Debug("audit log opened", "path", filepath.Join(cfg.DataDir, "audit.db"))
+
 	// Start API server
-	srv := api.NewServer(policies, gen, extractor, ledger, consensus, receiptStore, detector)
-	log.Fatal(srv.ListenAndServe(cfg.ListenAddr))
+	srv := api.NewServer(policies, gen, extractor, ledger, consensus, receiptStore, detector, auditLog)
+	slog.Info("starting JurisPath API server", "addr", cfg.ListenAddr)
+	if err := srv.ListenAndServe(cfg.ListenAddr); err != nil {
+		slog.Error("server exited", "error", err)
+		os.Exit(1)
+	}
 }
