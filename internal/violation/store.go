@@ -96,7 +96,7 @@ func NewBoltViolationStore(dbPath string) (*BoltViolationStore, error) {
 		return nil
 	})
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("creating buckets: %w", err)
 	}
 	return &BoltViolationStore{db: db}, nil

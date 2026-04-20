@@ -28,7 +28,7 @@ func TestBoltStore_AppendAndGetByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBoltStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	r := makeReceipt("r1", "tx1")
 	if err := store.Append(r); err != nil {
@@ -53,7 +53,7 @@ func TestBoltStore_GetByTxID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBoltStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	r := makeReceipt("r1", "tx1")
 	if err := store.Append(r); err != nil {
@@ -87,7 +87,7 @@ func TestBoltStore_ListAndCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBoltStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	for i := 0; i < 5; i++ {
 		r := makeReceipt("r"+string(rune('A'+i)), "tx"+string(rune('A'+i)))
@@ -125,14 +125,14 @@ func TestBoltStore_Persistence(t *testing.T) {
 	if err := store.Append(r); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	store.Close()
+	_ = store.Close()
 
 	// Reopen and verify
 	store2, err := receipt.NewBoltStore(dbPath)
 	if err != nil {
 		t.Fatalf("NewBoltStore (reopen): %v", err)
 	}
-	defer store2.Close()
+	defer func() { _ = store2.Close() }()
 
 	got, err := store2.GetByID("r1")
 	if err != nil {

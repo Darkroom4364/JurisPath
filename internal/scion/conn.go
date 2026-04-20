@@ -24,19 +24,19 @@ func NewSCIONNetwork(ctx context.Context, daemonAddr string) (*snet.SCIONNetwork
 
 	localIA, err := conn.LocalIA(ctx)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, 0, fmt.Errorf("querying local IA: %w", err)
 	}
 
 	portStart, portEnd, err := conn.PortRange(ctx)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, 0, fmt.Errorf("querying port range: %w", err)
 	}
 
 	interfaces, err := conn.Interfaces(ctx)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, 0, fmt.Errorf("querying interfaces: %w", err)
 	}
 

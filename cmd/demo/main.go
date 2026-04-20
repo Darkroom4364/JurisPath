@@ -87,13 +87,13 @@ func sendFilterPaths(baseURL, policyID string, paths []model.SCIONPath) {
 	if err != nil {
 		log.Fatalf("filter-paths request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		Compliant    []model.SCIONPath `json:"compliant"`
 		NonCompliant []model.SCIONPath `json:"non_compliant"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	_ = json.NewDecoder(resp.Body).Decode(&result)
 
 	fmt.Printf("  Candidate paths: %d\n", len(paths))
 	fmt.Printf("  Compliant: %d\n", len(result.Compliant))
@@ -120,10 +120,10 @@ func sendCheck(baseURL, txID, policyID string, hops []model.ASHop) {
 	if err != nil {
 		log.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result model.PolicyResult
-	json.NewDecoder(resp.Body).Decode(&result)
+	_ = json.NewDecoder(resp.Body).Decode(&result)
 
 	if result.Compliant {
 		fmt.Printf("  COMPLIANT - Receipt ID: %s\n", result.Receipt.ID)

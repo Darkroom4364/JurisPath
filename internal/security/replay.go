@@ -8,12 +8,6 @@ import (
 
 const DefaultValidityWindow = 30 * time.Second
 
-// replayEntry tracks a seen fingerprint+seqNo combination and its timestamp.
-type replayEntry struct {
-	seqNo     uint64
-	timestamp time.Time
-}
-
 // ReplayDetector defends against path replay attacks by tracking seen
 // fingerprint+seqNo pairs within a configurable validity window.
 type ReplayDetector struct {

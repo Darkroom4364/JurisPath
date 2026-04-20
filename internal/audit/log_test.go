@@ -15,7 +15,7 @@ func TestAuditLog_AppendAndList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditLog: %v", err)
 	}
-	defer al.Close()
+	defer func() { _ = al.Close() }()
 
 	for i := 0; i < 10; i++ {
 		entry := audit.AuditEntry{
@@ -78,13 +78,13 @@ func TestAuditLog_Persistence(t *testing.T) {
 	if err := al.Append(entry); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	al.Close()
+	_ = al.Close()
 
 	al2, err := audit.NewAuditLog(dbPath)
 	if err != nil {
 		t.Fatalf("NewAuditLog (reopen): %v", err)
 	}
-	defer al2.Close()
+	defer func() { _ = al2.Close() }()
 
 	count, err := al2.Count()
 	if err != nil {
@@ -112,7 +112,7 @@ func TestAuditLog_EventTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuditLog: %v", err)
 	}
-	defer al.Close()
+	defer func() { _ = al.Close() }()
 
 	types := []string{"check", "receipt", "violation", "settle"}
 	for _, et := range types {

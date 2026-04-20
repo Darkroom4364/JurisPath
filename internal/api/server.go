@@ -132,7 +132,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleListReceipts(w http.ResponseWriter, _ *http.Request) {
@@ -142,7 +142,7 @@ func (s *Server) handleListReceipts(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(receipts)
+	_ = json.NewEncoder(w).Encode(receipts)
 }
 
 func (s *Server) handleListViolations(w http.ResponseWriter, _ *http.Request) {
@@ -152,12 +152,12 @@ func (s *Server) handleListViolations(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(violations)
+	_ = json.NewEncoder(w).Encode(violations)
 }
 
 func (s *Server) handleListPolicies(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.policies)
+	_ = json.NewEncoder(w).Encode(s.policies)
 }
 
 // SettleRequest is the payload for POST /api/settle.
@@ -202,7 +202,7 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 		// Transaction was rejected (e.g. insufficient balance). Return the
 		// result with 200 so the caller can inspect the consensus outcome.
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 		return
 	}
 
@@ -233,7 +233,7 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // LedgerResponse is returned by GET /api/ledger.
@@ -248,12 +248,12 @@ func (s *Server) handleLedger(w http.ResponseWriter, _ *http.Request) {
 		Round:      s.ledger.CurrentRound(),
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleTransactions(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.ledger.ListTransactions())
+	_ = json.NewEncoder(w).Encode(s.ledger.ListTransactions())
 }
 
 // FilterPathsRequest is the payload for POST /api/filter-paths (Scenario C).
@@ -286,7 +286,7 @@ func (s *Server) handleFilterPaths(w http.ResponseWriter, r *http.Request) {
 	result := filter.FilterPaths(req.Paths)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
@@ -308,7 +308,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		select {
 		case v := <-ch:
 			data, _ := json.Marshal(v)
-			fmt.Fprintf(w, "event: violation\ndata: %s\n\n", data)
+			_, _ = fmt.Fprintf(w, "event: violation\ndata: %s\n\n", data)
 			flusher.Flush()
 		case <-r.Context().Done():
 			return

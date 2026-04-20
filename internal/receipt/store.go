@@ -96,7 +96,7 @@ func NewBoltStore(dbPath string) (*BoltStore, error) {
 		return nil
 	})
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("creating buckets: %w", err)
 	}
 	return &BoltStore{db: db}, nil

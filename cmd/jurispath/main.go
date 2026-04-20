@@ -42,7 +42,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("SCION daemon: %v", err)
 		}
-		defer closer.Close()
+		defer func() { _ = closer.Close() }()
 		extractor = ext
 		log.Printf("using real SCION path extractor (daemon: %s)", cfg.SCIONDaemonAddr)
 	} else {
@@ -82,13 +82,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("opening receipt store: %v", err)
 	}
-	defer receiptStore.Close()
+	defer func() { _ = receiptStore.Close() }()
 
 	violationStore, err := violation.NewBoltViolationStore(filepath.Join(cfg.DataDir, "violations.db"))
 	if err != nil {
 		log.Fatalf("opening violation store: %v", err)
 	}
-	defer violationStore.Close()
+	defer func() { _ = violationStore.Close() }()
 
 	detector := violation.NewDetector(violationStore)
 
