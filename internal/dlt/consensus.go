@@ -1,12 +1,16 @@
 package dlt
 
-import "log/slog"
+import (
+	"log/slog"
+	"sync"
+)
 
 // ConsensusEngine orchestrates a simple 2-phase consensus protocol
 // (propose -> vote -> commit) across a set of validators. Currently runs
 // locally in a single process; the SCION networking layer will be plugged
 // in separately.
 type ConsensusEngine struct {
+	mu           sync.Mutex
 	ledger       *Ledger
 	validators   []ValidatorState
 	currentRound uint64
@@ -26,6 +30,9 @@ func NewConsensusEngine(ledger *Ledger, validators []ValidatorState) *ConsensusE
 //  3. All validators vote on the proposal.
 //  4. If a majority votes yes, the transaction is committed.
 func (ce *ConsensusEngine) RunRound(tx *Transaction) (*ConsensusResult, error) {
+	ce.mu.Lock()
+	defer ce.mu.Unlock()
+
 	slog.Debug("starting consensus round", "tx_id", tx.ID, "from", tx.From, "to", tx.To, "amount", tx.Amount, "currency", tx.Currency)
 
 	// Step 1: submit to pending pool.
@@ -106,6 +113,9 @@ func (ce *ConsensusEngine) RunRound(tx *Transaction) (*ConsensusResult, error) {
 // RunRoundFromPending runs consensus for a transaction that's already in the
 // pending pool (submitted via SubmitTransactionIfAbsent). Skips the submit step.
 func (ce *ConsensusEngine) RunRoundFromPending(tx *Transaction) (*ConsensusResult, error) {
+	ce.mu.Lock()
+	defer ce.mu.Unlock()
+
 	slog.Debug("starting consensus round (from pending)", "tx_id", tx.ID)
 
 	// Step 1: first validator proposes.
