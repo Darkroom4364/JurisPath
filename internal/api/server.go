@@ -176,6 +176,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	var req CheckRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Warn("invalid check request body", "error", err, "remote", r.RemoteAddr)
+		s.audit("check", map[string]any{"outcome": "error", "code": "INVALID_REQUEST", "error": err.Error()})
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
@@ -185,6 +186,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	checker, ok := s.checkers[req.PolicyID]
 	if !ok {
 		slog.Warn("unknown policy in check request", "policy_id", req.PolicyID, "tx_id", req.TransactionID)
+		s.audit("check", map[string]any{"tx_id": req.TransactionID, "policy_id": req.PolicyID, "outcome": "error", "code": "UNKNOWN_POLICY"})
 		writeError(w, http.StatusBadRequest, "UNKNOWN_POLICY", fmt.Sprintf("unknown policy: %s", req.PolicyID))
 		return
 	}
@@ -192,6 +194,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	path, err := scion.BuildSCIONPath(s.extractor, req.RawPath)
 	if err != nil {
 		slog.Error("path extraction failed", "tx_id", req.TransactionID, "error", err)
+		s.audit("check", map[string]any{"tx_id": req.TransactionID, "policy_id": req.PolicyID, "outcome": "error", "code": "INVALID_REQUEST", "error": err.Error()})
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", fmt.Sprintf("path extraction failed: %v", err))
 		return
 	}
@@ -200,6 +203,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	result, err := checker.Check(path)
 	if err != nil {
 		slog.Error("compliance check failed", "tx_id", req.TransactionID, "policy_id", req.PolicyID, "error", err)
+		s.audit("check", map[string]any{"tx_id": req.TransactionID, "policy_id": req.PolicyID, "outcome": "error", "code": "INTERNAL_ERROR", "error": err.Error()})
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fmt.Sprintf("check failed: %v", err))
 		return
 	}
@@ -209,11 +213,13 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		rcpt, err := s.generator.Issue(req.TransactionID, req.PolicyID, path)
 		if err != nil {
 			slog.Error("receipt generation failed", "tx_id", req.TransactionID, "error", err)
+			s.audit("check", map[string]any{"tx_id": req.TransactionID, "policy_id": req.PolicyID, "outcome": "error", "code": "INTERNAL_ERROR", "error": err.Error()})
 			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fmt.Sprintf("receipt generation failed: %v", err))
 			return
 		}
 		if err := s.receipts.Append(rcpt); err != nil {
 			slog.Error("failed to persist receipt", "tx_id", req.TransactionID, "receipt_id", rcpt.ID, "error", err)
+			s.audit("check", map[string]any{"tx_id": req.TransactionID, "policy_id": req.PolicyID, "outcome": "error", "code": "INTERNAL_ERROR", "error": err.Error()})
 			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fmt.Sprintf("persisting receipt failed: %v", err))
 			return
 		}
@@ -294,19 +300,23 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	var req SettleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Warn("invalid settle request body", "error", err, "remote", r.RemoteAddr)
+		s.audit("settle", map[string]any{"outcome": "error", "code": "INVALID_REQUEST", "error": err.Error()})
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
 	if req.From == "" || req.To == "" || req.Amount <= 0 || req.Currency == "" {
 		slog.Warn("settle request missing required fields", "from", req.From, "to", req.To, "amount", req.Amount, "currency", req.Currency)
+		s.audit("settle", map[string]any{"outcome": "error", "code": "INVALID_REQUEST", "from": req.From, "to": req.To})
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "from, to, amount, and currency are required")
 		return
 	}
 	if req.PolicyID == "" {
+		s.audit("settle", map[string]any{"outcome": "error", "code": "POLICY_REQUIRED", "from": req.From, "to": req.To})
 		writeError(w, http.StatusBadRequest, "POLICY_REQUIRED", "policy_id is required for settlement")
 		return
 	}
 	if req.RawPath == nil {
+		s.audit("settle", map[string]any{"outcome": "error", "code": "PATH_REQUIRED", "from": req.From, "to": req.To, "policy_id": req.PolicyID})
 		writeError(w, http.StatusBadRequest, "PATH_REQUIRED", "raw_path is required for settlement")
 		return
 	}
@@ -317,6 +327,7 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	checker, ok := s.checkers[req.PolicyID]
 	if !ok {
 		slog.Warn("unknown policy in settle request", "policy_id", req.PolicyID)
+		s.audit("settle", map[string]any{"outcome": "error", "code": "UNKNOWN_POLICY", "policy_id": req.PolicyID, "from": req.From, "to": req.To})
 		writeError(w, http.StatusBadRequest, "UNKNOWN_POLICY", fmt.Sprintf("unknown policy: %s", req.PolicyID))
 		return
 	}
@@ -324,6 +335,7 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	path, err := scion.BuildSCIONPath(s.extractor, req.RawPath)
 	if err != nil {
 		slog.Error("path extraction failed during settlement", "error", err)
+		s.audit("settle", map[string]any{"outcome": "error", "code": "INVALID_REQUEST", "policy_id": req.PolicyID, "error": err.Error()})
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", fmt.Sprintf("path extraction failed: %v", err))
 		return
 	}
@@ -331,6 +343,7 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	checkResult, err := checker.Check(path)
 	if err != nil {
 		slog.Error("compliance check failed during settlement", "error", err)
+		s.audit("settle", map[string]any{"outcome": "error", "code": "INTERNAL_ERROR", "policy_id": req.PolicyID, "error": err.Error()})
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fmt.Sprintf("compliance check failed: %v", err))
 		return
 	}
@@ -373,21 +386,25 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 		switch existing.Status {
 		case dlt.TxConfirmed:
 			slog.Debug("idempotent settle — already confirmed", "tx_id", txID)
+			s.audit("settle", map[string]any{"tx_id": txID, "outcome": "idempotent", "status": "confirmed"})
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(SettleResponse{
 				Consensus: &dlt.ConsensusResult{Confirmed: true, TxID: txID},
 			})
 			return
 		case dlt.TxPending:
+			s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": "TX_PENDING"})
 			writeError(w, http.StatusConflict, "TX_PENDING", fmt.Sprintf("transaction %s is pending", txID))
 			return
 		default: // TxRejected
+			s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": "DUPLICATE_TX"})
 			writeError(w, http.StatusConflict, "DUPLICATE_TX", fmt.Sprintf("transaction ID %s was already used", txID))
 			return
 		}
 	}
 	if submitErr != nil {
 		slog.Warn("settlement submit failed", "tx_id", txID, "error", submitErr)
+		s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": "INVALID_REQUEST", "error": submitErr.Error()})
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", submitErr.Error())
 		return
 	}
@@ -418,6 +435,7 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	rcpt, err := s.generator.Issue(txID, req.PolicyID, path)
 	if err != nil {
 		slog.Error("receipt generation failed during settlement", "tx_id", txID, "error", err)
+		s.audit("settle", map[string]any{"tx_id": txID, "policy_id": req.PolicyID, "outcome": "error", "code": "INTERNAL_ERROR", "error": "receipt generation failed: " + err.Error()})
 		// Settlement succeeded but receipt failed — still return consensus result
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -539,6 +557,7 @@ func (s *Server) handleFilterPaths(w http.ResponseWriter, r *http.Request) {
 	var req FilterPathsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Warn("invalid filter-paths request body", "error", err, "remote", r.RemoteAddr)
+		s.audit("filter", map[string]any{"outcome": "error", "code": "INVALID_REQUEST", "error": err.Error()})
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
@@ -555,6 +574,7 @@ func (s *Server) handleFilterPaths(w http.ResponseWriter, r *http.Request) {
 	}
 	if pol == nil {
 		slog.Warn("unknown policy in filter-paths request", "policy_id", req.PolicyID)
+		s.audit("filter", map[string]any{"outcome": "error", "code": "UNKNOWN_POLICY", "policy_id": req.PolicyID})
 		writeError(w, http.StatusBadRequest, "UNKNOWN_POLICY", fmt.Sprintf("unknown policy: %s", req.PolicyID))
 		return
 	}
@@ -563,6 +583,12 @@ func (s *Server) handleFilterPaths(w http.ResponseWriter, r *http.Request) {
 	result := filter.FilterPaths(req.Paths)
 
 	slog.Debug("path filtering complete", "policy_id", req.PolicyID, "compliant", len(result.Compliant), "non_compliant", len(result.NonCompliant))
+	s.audit("filter", map[string]any{
+		"policy_id":     req.PolicyID,
+		"candidate":     len(req.Paths),
+		"compliant":     len(result.Compliant),
+		"non_compliant": len(result.NonCompliant),
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
