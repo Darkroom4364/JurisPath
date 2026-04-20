@@ -6,3 +6,4 @@ bin/
 deploy/topology/isd-ch/gen/
 deploy/topology/isd-eu/gen/
 deploy/topology/isd-x/gen/
+jurispath
