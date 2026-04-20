@@ -53,11 +53,12 @@ func (ce *ConsensusEngine) RunRound(tx *Transaction) (*ConsensusResult, error) {
 	yesVotes := 0
 	totalVotes := len(ce.validators)
 	for _, v := range ce.validators {
-		vote, err := ce.ledger.Vote(proposal)
+		ballot := *proposal
+		ballot.ValidatorID = v.ID
+		vote, err := ce.ledger.Vote(&ballot)
 		if err != nil {
 			continue
 		}
-		_ = v // vote is cast on behalf of each validator
 		if string(vote.Payload) == "yes" {
 			yesVotes++
 		}
@@ -125,11 +126,12 @@ func (ce *ConsensusEngine) RunRoundFromPending(tx *Transaction) (*ConsensusResul
 	yesVotes := 0
 	totalVotes := len(ce.validators)
 	for _, v := range ce.validators {
-		vote, err := ce.ledger.Vote(proposal)
+		ballot := *proposal
+		ballot.ValidatorID = v.ID
+		vote, err := ce.ledger.Vote(&ballot)
 		if err != nil {
 			continue
 		}
-		_ = v
 		if string(vote.Payload) == "yes" {
 			yesVotes++
 		}
