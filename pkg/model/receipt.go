@@ -14,6 +14,7 @@ type ComplianceReceipt struct {
 	Timestamp       time.Time  `json:"timestamp"`
 	Signature       []byte     `json:"signature"`
 	OraclePublicKey []byte     `json:"oracle_public_key"`
+	PreviousHash    []byte     `json:"previous_hash,omitempty"`
 }
 
 // ISDProof contains proof of an AS's membership in a specific ISD,

@@ -8,6 +8,7 @@ import (
 
 	"github.com/jurispath/jurispath/config"
 	"github.com/jurispath/jurispath/internal/api"
+	"github.com/jurispath/jurispath/internal/audit"
 	"github.com/jurispath/jurispath/internal/dlt"
 	"github.com/jurispath/jurispath/internal/policy"
 	"github.com/jurispath/jurispath/internal/receipt"
@@ -51,7 +52,7 @@ func main() {
 	}
 
 	// Initialize receipt generator with fresh Ed25519 key pair
-	gen, err := receipt.NewGenerator()
+	gen, err := receipt.NewGeneratorFromFile(cfg.OracleKeyPath)
 	if err != nil {
 		slog.Error("failed to create receipt generator", "error", err)
 		os.Exit(1)
@@ -100,6 +101,11 @@ func main() {
 	defer receiptStore.Close()
 	slog.Debug("receipt store opened", "path", filepath.Join(cfg.DataDir, "receipts.db"))
 
+	if err := gen.SeedChain(receiptStore); err != nil {
+		slog.Error("failed to seed receipt chain", "error", err)
+		os.Exit(1)
+	}
+
 	violationStore, err := violation.NewBoltViolationStore(filepath.Join(cfg.DataDir, "violations.db"))
 	if err != nil {
 		slog.Error("failed to open violation store", "error", err)
@@ -110,8 +116,16 @@ func main() {
 
 	detector := violation.NewDetector(violationStore)
 
+	auditLog, err := audit.NewAuditLog(filepath.Join(cfg.DataDir, "audit.db"))
+	if err != nil {
+		slog.Error("failed to open audit log", "error", err)
+		os.Exit(1)
+	}
+	defer auditLog.Close()
+	slog.Debug("audit log opened", "path", filepath.Join(cfg.DataDir, "audit.db"))
+
 	// Start API server
-	srv := api.NewServer(policies, gen, extractor, ledger, consensus, receiptStore, detector)
+	srv := api.NewServer(policies, gen, extractor, ledger, consensus, receiptStore, detector, auditLog)
 	slog.Info("starting JurisPath API server", "addr", cfg.ListenAddr)
 	if err := srv.ListenAndServe(cfg.ListenAddr); err != nil {
 		slog.Error("server exited", "error", err)

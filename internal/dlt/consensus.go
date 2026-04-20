@@ -93,7 +93,79 @@ func (ce *ConsensusEngine) RunRound(tx *Transaction) (*ConsensusResult, error) {
 
 	// Not enough votes — reject the transaction.
 	slog.Warn("transaction rejected — insufficient votes", "tx_id", tx.ID, "yes", yesVotes, "needed", majority)
-	tx.Status = TxRejected
+	ce.ledger.CleanupPending(tx.ID)
+	return &ConsensusResult{
+		Confirmed: false,
+		Round:     proposal.Round,
+		Votes:     yesVotes,
+		TxID:      tx.ID,
+	}, nil
+}
+
+// RunRoundFromPending runs consensus for a transaction that's already in the
+// pending pool (submitted via SubmitTransactionIfAbsent). Skips the submit step.
+func (ce *ConsensusEngine) RunRoundFromPending(tx *Transaction) (*ConsensusResult, error) {
+	slog.Debug("starting consensus round (from pending)", "tx_id", tx.ID)
+
+	// Step 1: first validator proposes.
+	proposer := ce.validators[0].ID
+	proposal, err := ce.ledger.ProposeBlock(proposer)
+	if err != nil {
+		ce.ledger.CleanupPending(tx.ID)
+		return &ConsensusResult{
+			Confirmed: false,
+			TxID:      tx.ID,
+		}, err
+	}
+
+	ce.currentRound = proposal.Round
+	slog.Debug("block proposed", "tx_id", tx.ID, "round", proposal.Round, "proposer", proposer)
+
+	// Step 2: collect votes from all validators.
+	yesVotes := 0
+	totalVotes := len(ce.validators)
+	for _, v := range ce.validators {
+		vote, err := ce.ledger.Vote(proposal)
+		if err != nil {
+			continue
+		}
+		_ = v
+		if string(vote.Payload) == "yes" {
+			yesVotes++
+		}
+	}
+
+	slog.Debug("votes collected", "tx_id", tx.ID, "yes", yesVotes, "total", totalVotes)
+
+	// Step 3: commit if majority.
+	majority := totalVotes/2 + 1
+	if yesVotes >= majority {
+		commitMsg := &ConsensusMessage{
+			Type:        MsgCommit,
+			TxID:        tx.ID,
+			ValidatorID: proposer,
+			Round:       proposal.Round,
+		}
+		if err := ce.ledger.Commit(commitMsg); err != nil {
+			return &ConsensusResult{
+				Confirmed: false,
+				Round:     proposal.Round,
+				Votes:     yesVotes,
+				TxID:      tx.ID,
+			}, err
+		}
+		slog.Info("transaction committed", "tx_id", tx.ID, "round", proposal.Round, "votes", yesVotes)
+		return &ConsensusResult{
+			Confirmed: true,
+			Round:     proposal.Round,
+			Votes:     yesVotes,
+			TxID:      tx.ID,
+		}, nil
+	}
+
+	// Not enough votes — clean up pending and reject.
+	slog.Warn("transaction rejected — insufficient votes", "tx_id", tx.ID, "yes", yesVotes, "needed", majority)
+	ce.ledger.CleanupPending(tx.ID)
 	return &ConsensusResult{
 		Confirmed: false,
 		Round:     proposal.Round,

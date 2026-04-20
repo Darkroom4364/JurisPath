@@ -15,6 +15,7 @@ type Ledger struct {
 	pending      map[string]*Transaction    // txID -> tx
 	confirmed    map[string]*Transaction    // txID -> tx
 	allTxs       []*Transaction             // ordered history
+	seen         map[string]bool            // all txIDs ever submitted (prevents replay)
 	currentRound uint64
 }
 
@@ -24,6 +25,7 @@ func NewLedger(validators []ValidatorState) *Ledger {
 		validators: make(map[string]*ValidatorState, len(validators)),
 		pending:    make(map[string]*Transaction),
 		confirmed:  make(map[string]*Transaction),
+		seen:       make(map[string]bool),
 	}
 	for i := range validators {
 		v := validators[i]
@@ -68,8 +70,69 @@ func (l *Ledger) SubmitTransaction(tx *Transaction) error {
 	tx.Timestamp = time.Now()
 	l.pending[tx.ID] = tx
 	l.allTxs = append(l.allTxs, tx)
+	l.seen[tx.ID] = true
 	slog.Debug("transaction submitted to pending pool", "tx_id", tx.ID, "from", tx.From, "to", tx.To, "amount", tx.Amount, "currency", tx.Currency)
 	return nil
+}
+
+// SubmitTransactionIfAbsent checks if a transaction ID has been seen before
+// and only submits it if it hasn't. Returns (existing *Transaction, error).
+// If the txID was already seen, returns the existing transaction with nil error.
+// If the txID is new, submits and returns (nil, nil) on success.
+func (l *Ledger) SubmitTransactionIfAbsent(tx *Transaction) (*Transaction, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.seen[tx.ID] {
+		// Check confirmed first
+		if existing, ok := l.confirmed[tx.ID]; ok {
+			return existing, nil
+		}
+		// Check pending
+		if existing, ok := l.pending[tx.ID]; ok {
+			return existing, nil
+		}
+		// Was seen but neither confirmed nor pending — it was rejected
+		return &Transaction{ID: tx.ID, Status: TxRejected}, nil
+	}
+
+	// Not seen — validate and submit (same logic as SubmitTransaction but under existing lock)
+	sender, ok := l.validators[tx.From]
+	if !ok {
+		return nil, fmt.Errorf("unknown sender validator: %s", tx.From)
+	}
+	if _, ok := l.validators[tx.To]; !ok {
+		return nil, fmt.Errorf("unknown recipient validator: %s", tx.To)
+	}
+	if tx.Amount <= 0 {
+		return nil, fmt.Errorf("amount must be positive, got %d", tx.Amount)
+	}
+	if sender.Balance[tx.Currency] < tx.Amount {
+		return nil, fmt.Errorf("insufficient %s balance: have %d, need %d",
+			tx.Currency, sender.Balance[tx.Currency], tx.Amount)
+	}
+
+	tx.Status = TxPending
+	tx.Nonce = sender.Nonce + 1
+	tx.Timestamp = time.Now()
+	l.pending[tx.ID] = tx
+	l.allTxs = append(l.allTxs, tx)
+	l.seen[tx.ID] = true
+	slog.Debug("transaction submitted to pending pool", "tx_id", tx.ID, "from", tx.From, "to", tx.To, "amount", tx.Amount, "currency", tx.Currency)
+	return nil, nil
+}
+
+// CleanupPending removes a transaction from the pending pool and marks it
+// as rejected. Called by ConsensusEngine when consensus fails.
+func (l *Ledger) CleanupPending(txID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if tx, ok := l.pending[txID]; ok {
+		tx.Status = TxRejected
+		delete(l.pending, txID)
+		slog.Debug("pending transaction cleaned up", "tx_id", txID)
+	}
 }
 
 // ProposeBlock creates a proposal message for the next pending transaction.
