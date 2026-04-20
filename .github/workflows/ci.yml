@@ -53,7 +53,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v7
+          version: latest
 
       - name: Check go mod tidy
         run: |
