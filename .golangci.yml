@@ -1,0 +1,13 @@
+version: "2"
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - (*encoding/json.Encoder).Encode
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (io.Closer).Close
