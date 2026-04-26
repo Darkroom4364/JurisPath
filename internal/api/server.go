@@ -120,7 +120,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 
 	// Serve dashboard static files
-	s.mux.Handle("GET /", http.FileServer(http.Dir(s.dashboardDir)))
+	if s.dashboardDir != "" {
+		s.mux.Handle("GET /", http.FileServer(http.Dir(s.dashboardDir)))
+	}
 }
 
 func (s *Server) auditWriter() {
