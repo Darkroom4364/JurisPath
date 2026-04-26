@@ -66,7 +66,8 @@ func (l *Ledger) SubmitTransaction(tx *Transaction) error {
 	}
 
 	tx.Status = TxPending
-	tx.Nonce = sender.Nonce + 1
+	sender.Nonce++
+	tx.Nonce = sender.Nonce
 	tx.Timestamp = time.Now()
 	l.pending[tx.ID] = tx
 	l.allTxs = append(l.allTxs, tx)
@@ -113,7 +114,8 @@ func (l *Ledger) SubmitTransactionIfAbsent(tx *Transaction) (*Transaction, error
 	}
 
 	tx.Status = TxPending
-	tx.Nonce = sender.Nonce + 1
+	sender.Nonce++
+	tx.Nonce = sender.Nonce
 	tx.Timestamp = time.Now()
 	l.pending[tx.ID] = tx
 	l.allTxs = append(l.allTxs, tx)
@@ -130,6 +132,9 @@ func (l *Ledger) CleanupPending(txID string) {
 
 	if tx, ok := l.pending[txID]; ok {
 		tx.Status = TxRejected
+		if sender, ok := l.validators[tx.From]; ok {
+			sender.Nonce--
+		}
 		delete(l.pending, txID)
 		slog.Debug("pending transaction cleaned up", "tx_id", txID)
 	}
@@ -223,7 +228,6 @@ func (l *Ledger) Commit(msg *ConsensusMessage) error {
 
 	sender.Balance[tx.Currency] -= tx.Amount
 	recipient.Balance[tx.Currency] += tx.Amount
-	sender.Nonce++
 
 	tx.Status = TxConfirmed
 	delete(l.pending, tx.ID)
@@ -250,10 +254,12 @@ func (l *Ledger) GetTransaction(txID string) *Transaction {
 	defer l.mu.RUnlock()
 
 	if tx, ok := l.confirmed[txID]; ok {
-		return tx
+		cp := *tx
+		return &cp
 	}
 	if tx, ok := l.pending[txID]; ok {
-		return tx
+		cp := *tx
+		return &cp
 	}
 	return nil
 }
@@ -264,7 +270,10 @@ func (l *Ledger) ListTransactions() []*Transaction {
 	defer l.mu.RUnlock()
 
 	out := make([]*Transaction, len(l.allTxs))
-	copy(out, l.allTxs)
+	for i, tx := range l.allTxs {
+		cp := *tx
+		out[i] = &cp
+	}
 	return out
 }
 
