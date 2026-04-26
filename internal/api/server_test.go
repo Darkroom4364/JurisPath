@@ -374,3 +374,106 @@ func TestHealthEndpoint(t *testing.T) {
 		t.Errorf("expected audit_healthy=true, got %v", health["audit_healthy"])
 	}
 }
+
+func postCheck(t *testing.T, url string, req CheckRequest) (*http.Response, map[string]any) {
+	t.Helper()
+	body, _ := json.Marshal(req)
+	resp, err := http.Post(url+"/api/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /api/check: %v", err)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+	resp.Body.Close()
+	return resp, result
+}
+
+func TestCheckCompliantPath(t *testing.T) {
+	env := setupTestEnv(t)
+
+	resp, result := postCheck(t, env.server.URL, CheckRequest{
+		TransactionID: "tx-compliant-1",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	})
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d: %v", resp.StatusCode, result)
+	}
+	if result["compliant"] != true {
+		t.Fatalf("expected compliant=true, got %v", result["compliant"])
+	}
+	if result["receipt"] == nil {
+		t.Fatal("expected a receipt in response")
+	}
+}
+
+func TestCheckNonCompliantPath(t *testing.T) {
+	env := setupTestEnv(t)
+
+	resp, result := postCheck(t, env.server.URL, CheckRequest{
+		TransactionID: "tx-noncompliant-1",
+		PolicyID:      "test-policy",
+		RawPath:       nonCompliantPath(t),
+	})
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d: %v", resp.StatusCode, result)
+	}
+	if result["compliant"] != false {
+		t.Fatalf("expected compliant=false, got %v", result["compliant"])
+	}
+	if result["violation"] == nil {
+		t.Fatal("expected a violation in response")
+	}
+}
+
+func TestCheckUnknownPolicy(t *testing.T) {
+	env := setupTestEnv(t)
+
+	resp, result := postCheck(t, env.server.URL, CheckRequest{
+		TransactionID: "tx-unknown-1",
+		PolicyID:      "nonexistent-policy",
+		RawPath:       compliantPath(t),
+	})
+
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+	if result["code"] != "UNKNOWN_POLICY" {
+		t.Fatalf("expected code UNKNOWN_POLICY, got %v", result["code"])
+	}
+}
+
+func TestCheckInvalidBody(t *testing.T) {
+	env := setupTestEnv(t)
+
+	resp, err := http.Post(env.server.URL+"/api/check", "application/json", bytes.NewReader([]byte("not json")))
+	if err != nil {
+		t.Fatalf("POST /api/check: %v", err)
+	}
+	defer resp.Body.Close()
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+	if result["code"] != "INVALID_REQUEST" {
+		t.Fatalf("expected code INVALID_REQUEST, got %v", result["code"])
+	}
+}
+
+func TestCheckMissingRawPath(t *testing.T) {
+	env := setupTestEnv(t)
+
+	resp, result := postCheck(t, env.server.URL, CheckRequest{
+		TransactionID: "tx-nopath-1",
+		PolicyID:      "test-policy",
+		RawPath:       nil,
+	})
+
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d: %v", resp.StatusCode, result)
+	}
+}
