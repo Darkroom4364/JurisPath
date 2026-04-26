@@ -110,12 +110,32 @@ func (ce *ConsensusEngine) RunRound(tx *Transaction) (*ConsensusResult, error) {
 	}, nil
 }
 
+// SubmitAndRunRound atomically submits a transaction (if absent) and runs
+// consensus under a single lock, closing the gap between submit and round.
+// Returns (existing *Transaction, result, error). If existing is non-nil,
+// the transaction was already seen and no round was run.
+func (ce *ConsensusEngine) SubmitAndRunRound(tx *Transaction) (*Transaction, *ConsensusResult, error) {
+	ce.mu.Lock()
+	defer ce.mu.Unlock()
+
+	existing, err := ce.ledger.SubmitTransactionIfAbsent(tx)
+	if existing != nil || err != nil {
+		return existing, nil, err
+	}
+
+	result, err := ce.runRoundFromPendingLocked(tx)
+	return nil, result, err
+}
+
 // RunRoundFromPending runs consensus for a transaction that's already in the
 // pending pool (submitted via SubmitTransactionIfAbsent). Skips the submit step.
 func (ce *ConsensusEngine) RunRoundFromPending(tx *Transaction) (*ConsensusResult, error) {
 	ce.mu.Lock()
 	defer ce.mu.Unlock()
+	return ce.runRoundFromPendingLocked(tx)
+}
 
+func (ce *ConsensusEngine) runRoundFromPendingLocked(tx *Transaction) (*ConsensusResult, error) {
 	slog.Debug("starting consensus round (from pending)", "tx_id", tx.ID)
 
 	// Step 1: first validator proposes.
