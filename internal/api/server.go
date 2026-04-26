@@ -58,7 +58,9 @@ type Server struct {
 	auditLog      *audit.AuditLog
 	auditCh       chan audit.AuditEntry
 	auditFailures atomic.Uint64
+	auditDone     chan struct{}
 	startTime     time.Time
+	dashboardDir  string
 }
 
 // NewServer creates the API server with all dependencies.
@@ -71,6 +73,7 @@ func NewServer(
 	rs receipt.Store,
 	det *violation.Detector,
 	al *audit.AuditLog,
+	dashboardDir string,
 ) *Server {
 	s := &Server{
 		mux:       http.NewServeMux(),
@@ -83,8 +86,10 @@ func NewServer(
 		ledger:    ledger,
 		consensus: consensus,
 		auditLog:  al,
-		auditCh:   make(chan audit.AuditEntry, 4096),
-		startTime: time.Now(),
+		auditCh:      make(chan audit.AuditEntry, 4096),
+		auditDone:    make(chan struct{}),
+		startTime:    time.Now(),
+		dashboardDir: dashboardDir,
 	}
 
 	for _, p := range policies {
@@ -117,10 +122,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 
 	// Serve dashboard static files
-	s.mux.Handle("GET /", http.FileServer(http.Dir("dashboard")))
+	if s.dashboardDir != "" {
+		s.mux.Handle("GET /", http.FileServer(http.Dir(s.dashboardDir)))
+	}
 }
 
 func (s *Server) auditWriter() {
+	defer close(s.auditDone)
 	for entry := range s.auditCh {
 		if err := s.auditLog.Append(entry); err != nil {
 			s.auditFailures.Add(1)
@@ -160,6 +168,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// Close drains the audit channel and waits for the writer goroutine to exit.
+func (s *Server) Close() {
+	close(s.auditCh)
+	<-s.auditDone
+}
+
 // ListenAndServe starts the HTTP server.
 func (s *Server) ListenAndServe(addr string) error {
 	return http.ListenAndServe(addr, recoveryMiddleware(s.mux))
@@ -172,7 +186,10 @@ type CheckRequest struct {
 	RawPath       []byte `json:"raw_path"`
 }
 
+const maxBodySize = 1 << 20 // 1 MB
+
 func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req CheckRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Warn("invalid check request body", "error", err, "remote", r.RemoteAddr)
@@ -297,6 +314,7 @@ type SettleResponse struct {
 }
 
 func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req SettleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Warn("invalid settle request body", "error", err, "remote", r.RemoteAddr)
@@ -552,6 +570,7 @@ type FilterPathsRequest struct {
 }
 
 func (s *Server) handleFilterPaths(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req FilterPathsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Warn("invalid filter-paths request body", "error", err, "remote", r.RemoteAddr)
@@ -607,7 +626,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	ch := s.detector.Subscribe()
-	defer func() { /* cleanup */ }()
+	defer s.detector.Unsubscribe(ch)
 
 	for {
 		select {

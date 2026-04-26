@@ -1,7 +1,6 @@
 package security
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"strings"
 	"testing"
@@ -129,5 +128,3 @@ func TestValidateReceiptChain_GenesisNilHash(t *testing.T) {
 	}
 }
 
-// Ensure sha256 import is used (compile guard)
-var _ = sha256.Sum256

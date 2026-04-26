@@ -3,6 +3,7 @@ package pathcheck
 import (
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/jurispath/jurispath/internal/policy"
@@ -12,6 +13,7 @@ import (
 
 // Checker evaluates SCION paths against jurisdiction policies.
 type Checker struct {
+	mu             sync.RWMutex
 	policy         *policy.Policy
 	replayDetector *security.ReplayDetector
 }
@@ -25,6 +27,8 @@ func NewChecker(p *policy.Policy) *Checker {
 // When set, path checks will also verify that the path fingerprint
 // has not been replayed.
 func (c *Checker) SetReplayDetector(rd *security.ReplayDetector) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.replayDetector = rd
 }
 
@@ -78,8 +82,11 @@ func (c *Checker) Check(path *model.SCIONPath) (*CheckResult, error) {
 	}
 
 	// If a replay detector is configured, check for path replay
-	if c.replayDetector != nil {
-		if err := c.replayDetector.Check(path.Fingerprint, 0, time.Now()); err != nil {
+	c.mu.RLock()
+	rd := c.replayDetector
+	c.mu.RUnlock()
+	if rd != nil {
+		if err := rd.Check(path.Fingerprint, 0, time.Now()); err != nil {
 			slog.Warn("path replay detected", "policy_id", c.policy.ID, "fingerprint", path.Fingerprint, "error", err)
 			return &CheckResult{
 				Compliant:      false,
