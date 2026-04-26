@@ -26,8 +26,10 @@ func TestFingerprint_KnownValue(t *testing.T) {
 
 func TestFingerprint_Deterministic(t *testing.T) {
 	raw := []byte("test-path-bytes")
-	if Fingerprint(raw) != Fingerprint(raw) {
-		t.Fatal("fingerprint is not deterministic")
+	a := Fingerprint(raw)
+	b := Fingerprint(raw)
+	if a != b {
+		t.Fatalf("fingerprint is not deterministic: %s != %s", a, b)
 	}
 }
 

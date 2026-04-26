@@ -52,7 +52,9 @@ mode: relaxed
 func TestLoadFromFile_Valid(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "p.yaml")
-	os.WriteFile(f, []byte(validYAML), 0644)
+	if err := os.WriteFile(f, []byte(validYAML), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
 
 	p, err := LoadFromFile(f)
 	if err != nil {
@@ -66,7 +68,9 @@ func TestLoadFromFile_Valid(t *testing.T) {
 func TestLoadFromFile_DefaultMode(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "p.yaml")
-	os.WriteFile(f, []byte("id: p1\nallowed_isds: [1]\n"), 0644)
+	if err := os.WriteFile(f, []byte("id: p1\nallowed_isds: [1]\n"), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
 
 	p, err := LoadFromFile(f)
 	if err != nil {
@@ -80,7 +84,9 @@ func TestLoadFromFile_DefaultMode(t *testing.T) {
 func TestLoadFromFile_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "bad.yaml")
-	os.WriteFile(f, []byte(":\t:bad"), 0644)
+	if err := os.WriteFile(f, []byte(":\t:bad"), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
 
 	if _, err := LoadFromFile(f); err == nil {
 		t.Fatal("expected error for invalid YAML")
@@ -88,17 +94,26 @@ func TestLoadFromFile_InvalidYAML(t *testing.T) {
 }
 
 func TestLoadFromFile_MissingFile(t *testing.T) {
-	if _, err := LoadFromFile("/nonexistent/path/p.yaml"); err == nil {
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	if _, err := LoadFromFile(missing); err == nil {
 		t.Fatal("expected error for missing file")
 	}
 }
 
 func TestLoadAllFromDir(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.yaml"), []byte("id: a\nallowed_isds: [1]\n"), 0644)
-	os.WriteFile(filepath.Join(dir, "b.yaml"), []byte("id: b\nallowed_isds: [2]\n"), 0644)
-	os.WriteFile(filepath.Join(dir, "c.txt"), []byte("ignored"), 0644)
-	os.Mkdir(filepath.Join(dir, "subdir"), 0755)
+	for _, f := range []struct{ name, content string }{
+		{"a.yaml", "id: a\nallowed_isds: [1]\n"},
+		{"b.yaml", "id: b\nallowed_isds: [2]\n"},
+		{"c.txt", "ignored"},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, f.name), []byte(f.content), 0644); err != nil {
+			t.Fatalf("writing %s: %v", f.name, err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0755); err != nil {
+		t.Fatalf("creating subdir: %v", err)
+	}
 
 	policies, err := LoadAllFromDir(dir)
 	if err != nil {
@@ -111,8 +126,14 @@ func TestLoadAllFromDir(t *testing.T) {
 
 func TestLoadAllFromDir_ShortFilenames(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.yaml"), []byte("id: a\nallowed_isds: [1]\n"), 0644)
-	os.WriteFile(filepath.Join(dir, "bc.yaml"), []byte("id: bc\nallowed_isds: [1]\n"), 0644)
+	for _, f := range []struct{ name, content string }{
+		{"a.yaml", "id: a\nallowed_isds: [1]\n"},
+		{"bc.yaml", "id: bc\nallowed_isds: [1]\n"},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, f.name), []byte(f.content), 0644); err != nil {
+			t.Fatalf("writing %s: %v", f.name, err)
+		}
+	}
 
 	if _, err := LoadAllFromDir(dir); err != nil {
 		t.Fatal(err)
@@ -120,7 +141,8 @@ func TestLoadAllFromDir_ShortFilenames(t *testing.T) {
 }
 
 func TestLoadAllFromDir_MissingDir(t *testing.T) {
-	if _, err := LoadAllFromDir("/nonexistent/dir"); err == nil {
+	missing := filepath.Join(t.TempDir(), "nonexistent")
+	if _, err := LoadAllFromDir(missing); err == nil {
 		t.Fatal("expected error for missing directory")
 	}
 }

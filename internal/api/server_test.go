@@ -377,14 +377,19 @@ func TestHealthEndpoint(t *testing.T) {
 
 func postCheck(t *testing.T, url string, req CheckRequest) (*http.Response, map[string]any) {
 	t.Helper()
-	body, _ := json.Marshal(req)
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshaling check request: %v", err)
+	}
 	resp, err := http.Post(url+"/api/check", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST /api/check: %v", err)
 	}
+	defer resp.Body.Close()
 	var result map[string]any
-	json.NewDecoder(resp.Body).Decode(&result)
-	resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding check response: %v", err)
+	}
 	return resp, result
 }
 
@@ -475,5 +480,8 @@ func TestCheckMissingRawPath(t *testing.T) {
 
 	if resp.StatusCode != 400 {
 		t.Fatalf("expected 400, got %d: %v", resp.StatusCode, result)
+	}
+	if result["code"] != "INVALID_REQUEST" {
+		t.Fatalf("expected code INVALID_REQUEST, got %v", result["code"])
 	}
 }
