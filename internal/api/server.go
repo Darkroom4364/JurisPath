@@ -58,6 +58,7 @@ type Server struct {
 	auditLog      *audit.AuditLog
 	auditCh       chan audit.AuditEntry
 	auditFailures atomic.Uint64
+	auditDone     chan struct{}
 	startTime     time.Time
 	dashboardDir  string
 }
@@ -86,6 +87,7 @@ func NewServer(
 		consensus: consensus,
 		auditLog:  al,
 		auditCh:      make(chan audit.AuditEntry, 4096),
+		auditDone:    make(chan struct{}),
 		startTime:    time.Now(),
 		dashboardDir: dashboardDir,
 	}
@@ -126,6 +128,7 @@ func (s *Server) routes() {
 }
 
 func (s *Server) auditWriter() {
+	defer close(s.auditDone)
 	for entry := range s.auditCh {
 		if err := s.auditLog.Append(entry); err != nil {
 			s.auditFailures.Add(1)
@@ -163,6 +166,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"receipt_count":  count,
 		"uptime_seconds": int(time.Since(s.startTime).Seconds()),
 	})
+}
+
+// Close drains the audit channel and waits for the writer goroutine to exit.
+func (s *Server) Close() {
+	close(s.auditCh)
+	<-s.auditDone
 }
 
 // ListenAndServe starts the HTTP server.
@@ -619,7 +628,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	ch := s.detector.Subscribe()
-	defer func() { /* cleanup */ }()
+	defer s.detector.Unsubscribe(ch)
 
 	for {
 		select {
