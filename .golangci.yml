@@ -16,4 +16,4 @@ linters:
     rules:
       - linters:
           - errcheck
-        text: '\.Close\('
+        text: '\.Close`'
