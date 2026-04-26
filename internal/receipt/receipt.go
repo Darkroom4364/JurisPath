@@ -141,7 +141,7 @@ func (g *Generator) Issue(txID, policyID string, path *model.SCIONPath) (*model.
 	}
 
 	// Sign the receipt
-	payload, err := g.marshalForSigning(receipt)
+	payload, err := marshalForSigning(receipt)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling receipt for signing: %w", err)
 	}
@@ -190,15 +190,14 @@ func (g *Generator) SeedChain(store Store) error {
 
 // Verify checks the Ed25519 signature on a compliance receipt.
 func Verify(receipt *model.ComplianceReceipt) (bool, error) {
-	g := &Generator{}
-	payload, err := g.marshalForSigning(receipt)
+	payload, err := marshalForSigning(receipt)
 	if err != nil {
 		return false, fmt.Errorf("marshaling receipt for verification: %w", err)
 	}
 	return ed25519.Verify(receipt.OraclePublicKey, payload, receipt.Signature), nil
 }
 
-func (g *Generator) marshalForSigning(r *model.ComplianceReceipt) ([]byte, error) {
+func marshalForSigning(r *model.ComplianceReceipt) ([]byte, error) {
 	// Deterministic serialization of the fields that are signed
 	signable := struct {
 		ID            string           `json:"id"`

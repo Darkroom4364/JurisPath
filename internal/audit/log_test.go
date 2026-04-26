@@ -2,6 +2,7 @@ package audit_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ func TestAuditLog_AppendAndList(t *testing.T) {
 		entry := audit.AuditEntry{
 			Timestamp: time.Now().UTC(),
 			EventType: "check",
-			Details:   json.RawMessage(`{"index":` + string(rune('0'+i)) + `}`),
+			Details:   json.RawMessage(fmt.Sprintf(`{"index":%d}`, i)),
 		}
 		if err := al.Append(entry); err != nil {
 			t.Fatalf("Append: %v", err)

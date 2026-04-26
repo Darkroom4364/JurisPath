@@ -7,9 +7,8 @@ import "log/slog"
 // locally in a single process; the SCION networking layer will be plugged
 // in separately.
 type ConsensusEngine struct {
-	ledger       *Ledger
-	validators   []ValidatorState
-	currentRound uint64
+	ledger     *Ledger
+	validators []ValidatorState
 }
 
 // NewConsensusEngine creates a consensus engine backed by the given ledger.
@@ -46,7 +45,6 @@ func (ce *ConsensusEngine) RunRound(tx *Transaction) (*ConsensusResult, error) {
 		}, err
 	}
 
-	ce.currentRound = proposal.Round
 	slog.Debug("block proposed", "tx_id", tx.ID, "round", proposal.Round, "proposer", proposer)
 
 	// Step 3: collect votes from all validators.
@@ -119,7 +117,6 @@ func (ce *ConsensusEngine) RunRoundFromPending(tx *Transaction) (*ConsensusResul
 		}, err
 	}
 
-	ce.currentRound = proposal.Round
 	slog.Debug("block proposed", "tx_id", tx.ID, "round", proposal.Round, "proposer", proposer)
 
 	// Step 2: collect votes from all validators.

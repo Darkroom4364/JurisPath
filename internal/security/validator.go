@@ -72,7 +72,7 @@ func (rv *ReceiptValidator) ValidateReceiptChain(receipts []*model.ComplianceRec
 			}
 
 			// Verify same oracle signed the chain
-			if fmt.Sprintf("%x", r.OraclePublicKey) != fmt.Sprintf("%x", prev.OraclePublicKey) {
+			if !bytes.Equal(r.OraclePublicKey, prev.OraclePublicKey) {
 				return fmt.Errorf(
 					"receipt chain broken at index %d: oracle public key changed",
 					i,

@@ -58,7 +58,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 		t.Fatalf("creating audit log: %v", err)
 	}
 
-	srv := NewServer([]*policy.Policy{pol}, gen, ext, ledger, consensus, rs, det, al)
+	srv := NewServer([]*policy.Policy{pol}, gen, ext, ledger, consensus, rs, det, al, t.TempDir())
 	ts := httptest.NewServer(srv.mux)
 	t.Cleanup(ts.Close)
 

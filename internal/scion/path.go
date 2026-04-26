@@ -85,7 +85,7 @@ func (e *SnetPathExtractor) ExtractHopsFromSnetPath(p snet.Path) ([]model.ASHop,
 		hops = append(hops, model.ASHop{
 			IA:  iaStr,
 			ISD: uint16(ia.ISD()),
-			AS:  fmt.Sprintf("%s", ia.AS()),
+			AS:  ia.AS().String(),
 		})
 	}
 

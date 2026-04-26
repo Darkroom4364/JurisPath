@@ -125,7 +125,7 @@ func main() {
 	slog.Debug("audit log opened", "path", filepath.Join(cfg.DataDir, "audit.db"))
 
 	// Start API server
-	srv := api.NewServer(policies, gen, extractor, ledger, consensus, receiptStore, detector, auditLog)
+	srv := api.NewServer(policies, gen, extractor, ledger, consensus, receiptStore, detector, auditLog, cfg.DashboardDir)
 	slog.Info("starting JurisPath API server", "addr", cfg.ListenAddr)
 	if err := srv.ListenAndServe(cfg.ListenAddr); err != nil {
 		slog.Error("server exited", "error", err)
