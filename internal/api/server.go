@@ -397,8 +397,8 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 		Currency: req.Currency,
 	}
 
-	// Check idempotency — has this txID been seen before?
-	existing, submitErr := s.ledger.SubmitTransactionIfAbsent(tx)
+	// Atomically submit + run consensus under one engine lock.
+	existing, result, submitErr := s.consensus.SubmitAndRunRound(tx)
 	if existing != nil {
 		// Transaction already exists
 		switch existing.Status {
@@ -420,19 +420,17 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if submitErr != nil {
+	if result == nil && submitErr != nil {
+		// Submit validation failed (before round ran)
 		slog.Warn("settlement submit failed", "tx_id", txID, "error", submitErr)
 		s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": "INVALID_REQUEST", "error": submitErr.Error()})
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", submitErr.Error())
 		return
 	}
-
-	// Transaction submitted to pending. Run consensus (propose → vote → commit).
-	result, err := s.consensus.RunRoundFromPending(tx)
 	resp := SettleResponse{Consensus: result}
 
-	if err != nil || (result != nil && !result.Confirmed) {
-		slog.Warn("settlement consensus failed", "tx_id", txID, "error", err)
+	if submitErr != nil || (result != nil && !result.Confirmed) {
+		slog.Warn("settlement consensus failed", "tx_id", txID, "error", submitErr)
 		s.audit("settle", map[string]any{
 			"tx_id":     txID,
 			"policy_id": req.PolicyID,
