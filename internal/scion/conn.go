@@ -44,6 +44,8 @@ func NewSCIONNetwork(ctx context.Context, daemonAddr string) (*snet.SCIONNetwork
 	}
 	slog.Debug("interfaces retrieved", "count", len(interfaces))
 
+	conn.Close()
+
 	topo := snet.Topology{
 		LocalIA: localIA,
 		PortRange: snet.TopologyPortRange{

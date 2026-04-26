@@ -67,6 +67,19 @@ func (d *Detector) Subscribe() chan *model.Violation {
 	return ch
 }
 
+// Unsubscribe removes a channel from the listener list and closes it.
+func (d *Detector) Unsubscribe(ch chan *model.Violation) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i, l := range d.listeners {
+		if l == ch {
+			d.listeners = append(d.listeners[:i], d.listeners[i+1:]...)
+			close(ch)
+			return
+		}
+	}
+}
+
 // List returns all recorded violations from the store.
 func (d *Detector) List() ([]*model.Violation, error) {
 	return d.store.List()
