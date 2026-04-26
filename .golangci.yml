@@ -8,6 +8,12 @@ linters:
     errcheck:
       exclude-functions:
         - (*encoding/json.Encoder).Encode
+        - (*encoding/json.Decoder).Decode
         - fmt.Fprintf
         - fmt.Fprintln
-        - (io.Closer).Close
+        - os.Remove
+  exclusions:
+    rules:
+      - linters:
+          - errcheck
+        text: '\.Close\('
