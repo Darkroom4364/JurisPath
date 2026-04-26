@@ -1,0 +1,8 @@
+.git
+bin/
+data/
+docs/
+testdata/
+*.db
+*.key
+*.pdf

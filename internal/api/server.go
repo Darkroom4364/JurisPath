@@ -59,6 +59,7 @@ type Server struct {
 	auditCh       chan audit.AuditEntry
 	auditFailures atomic.Uint64
 	startTime     time.Time
+	dashboardDir  string
 }
 
 // NewServer creates the API server with all dependencies.
@@ -71,6 +72,7 @@ func NewServer(
 	rs receipt.Store,
 	det *violation.Detector,
 	al *audit.AuditLog,
+	dashboardDir string,
 ) *Server {
 	s := &Server{
 		mux:       http.NewServeMux(),
@@ -83,8 +85,9 @@ func NewServer(
 		ledger:    ledger,
 		consensus: consensus,
 		auditLog:  al,
-		auditCh:   make(chan audit.AuditEntry, 4096),
-		startTime: time.Now(),
+		auditCh:      make(chan audit.AuditEntry, 4096),
+		startTime:    time.Now(),
+		dashboardDir: dashboardDir,
 	}
 
 	for _, p := range policies {
@@ -117,7 +120,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 
 	// Serve dashboard static files
-	s.mux.Handle("GET /", http.FileServer(http.Dir("dashboard")))
+	s.mux.Handle("GET /", http.FileServer(http.Dir(s.dashboardDir)))
 }
 
 func (s *Server) auditWriter() {
@@ -172,7 +175,10 @@ type CheckRequest struct {
 	RawPath       []byte `json:"raw_path"`
 }
 
+const maxBodySize = 1 << 20 // 1 MB
+
 func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req CheckRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Warn("invalid check request body", "error", err, "remote", r.RemoteAddr)
@@ -297,6 +303,7 @@ type SettleResponse struct {
 }
 
 func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req SettleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Warn("invalid settle request body", "error", err, "remote", r.RemoteAddr)
@@ -554,6 +561,7 @@ type FilterPathsRequest struct {
 }
 
 func (s *Server) handleFilterPaths(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req FilterPathsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Warn("invalid filter-paths request body", "error", err, "remote", r.RemoteAddr)

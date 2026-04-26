@@ -3,6 +3,8 @@ package policy
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,7 +28,7 @@ func (p *Policy) Validate() error {
 		return fmt.Errorf("policy %s: at least one allowed ISD is required", p.ID)
 	}
 	if p.Mode == "" {
-		p.Mode = "strict"
+		return fmt.Errorf("policy %s: mode is required", p.ID)
 	}
 	if p.Mode != "strict" && p.Mode != "relaxed" {
 		return fmt.Errorf("policy %s: mode must be 'strict' or 'relaxed', got %q", p.ID, p.Mode)
@@ -43,6 +45,9 @@ func LoadFromFile(path string) (*Policy, error) {
 	var p Policy
 	if err := yaml.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("parsing policy YAML: %w", err)
+	}
+	if p.Mode == "" {
+		p.Mode = "strict"
 	}
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -61,10 +66,10 @@ func LoadAllFromDir(dir string) ([]*Policy, error) {
 		if e.IsDir() {
 			continue
 		}
-		if ext := e.Name()[len(e.Name())-5:]; ext != ".yaml" {
+		if !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
-		p, err := LoadFromFile(dir + "/" + e.Name())
+		p, err := LoadFromFile(filepath.Join(dir, e.Name()))
 		if err != nil {
 			return nil, fmt.Errorf("loading %s: %w", e.Name(), err)
 		}
