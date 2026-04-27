@@ -54,12 +54,7 @@ func TestValidateReceiptChain_HashMismatch(t *testing.T) {
 	r3 := issueTestReceipt(t, gen, "tx-3", "policy-1")
 
 	// Tamper with r2's PreviousHash
-	if r2.PreviousHash != nil {
-		r2.PreviousHash = []byte("tampered-hash-value-that-is-wrong")
-	} else {
-		// If Phase 3a isn't done yet, manually set a wrong hash to test validation
-		r2.PreviousHash = []byte("tampered-hash-value-that-is-wrong")
-	}
+	r2.PreviousHash = []byte("tampered-hash-value-that-is-wrong")
 
 	rv := NewReceiptValidator(5 * time.Minute)
 	err = rv.ValidateReceiptChain([]*model.ComplianceReceipt{r1, r2, r3})
@@ -125,6 +120,28 @@ func TestValidateReceiptChain_GenesisNilHash(t *testing.T) {
 	rv := NewReceiptValidator(5 * time.Minute)
 	if err := rv.ValidateReceiptChain([]*model.ComplianceReceipt{r1}); err != nil {
 		t.Fatalf("single genesis receipt should pass: %v", err)
+	}
+}
+
+func TestValidateReceiptChain_NilPreviousHashRejected(t *testing.T) {
+	gen, err := receipt.NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+
+	r1 := issueTestReceipt(t, gen, "tx-1", "policy-1")
+	r2 := issueTestReceipt(t, gen, "tx-2", "policy-1")
+
+	// Strip PreviousHash from non-genesis receipt
+	r2.PreviousHash = nil
+
+	rv := NewReceiptValidator(5 * time.Minute)
+	err = rv.ValidateReceiptChain([]*model.ComplianceReceipt{r1, r2})
+	if err == nil {
+		t.Fatal("nil PreviousHash on non-genesis receipt should be rejected")
+	}
+	if !strings.Contains(err.Error(), "PreviousHash is nil") {
+		t.Fatalf("expected 'PreviousHash is nil' error, got: %v", err)
 	}
 }
 
