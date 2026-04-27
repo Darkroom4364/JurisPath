@@ -1,8 +1,6 @@
 package scion
 
 import (
-	"crypto/sha256"
-	"fmt"
 	"testing"
 
 	"github.com/jurispath/jurispath/pkg/model"
@@ -13,23 +11,37 @@ var testHops = []model.ASHop{
 	{IA: "1-ff00:0:111", ISD: 1, AS: "ff00:0:111"},
 }
 
-// --- Fingerprint ---
+// --- FingerprintHops ---
 
-func TestFingerprint_KnownValue(t *testing.T) {
-	raw := []byte("hello")
-	h := sha256.Sum256(raw)
-	want := fmt.Sprintf("%x", h)
-	if got := Fingerprint(raw); got != want {
-		t.Fatalf("got %s, want %s", got, want)
+func TestFingerprintHops_Deterministic(t *testing.T) {
+	a := FingerprintHops(testHops)
+	b := FingerprintHops(testHops)
+	if a != b {
+		t.Fatalf("fingerprint is not deterministic: %s != %s", a, b)
 	}
 }
 
-func TestFingerprint_Deterministic(t *testing.T) {
-	raw := []byte("test-path-bytes")
-	a := Fingerprint(raw)
-	b := Fingerprint(raw)
-	if a != b {
-		t.Fatalf("fingerprint is not deterministic: %s != %s", a, b)
+func TestFingerprintHops_DifferentHopsDiffer(t *testing.T) {
+	other := []model.ASHop{
+		{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"},
+		{IA: "2-ff00:0:210", ISD: 2, AS: "ff00:0:210"},
+	}
+	if FingerprintHops(testHops) == FingerprintHops(other) {
+		t.Fatal("different hops should produce different fingerprints")
+	}
+}
+
+func TestFingerprintHops_MockBuildParity(t *testing.T) {
+	raw, err := NewMockPath(testHops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := BuildSCIONPath(&MockPathExtractor{}, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Fingerprint != FingerprintHops(testHops) {
+		t.Fatalf("BuildSCIONPath fingerprint %s != FingerprintHops %s", p.Fingerprint, FingerprintHops(testHops))
 	}
 }
 
@@ -105,8 +117,15 @@ func TestBuildSCIONPath_ValidHops(t *testing.T) {
 	if len(p.Hops) != len(testHops) {
 		t.Fatalf("got %d hops, want %d", len(p.Hops), len(testHops))
 	}
-	if p.Fingerprint != Fingerprint(raw) {
+	if p.Fingerprint != FingerprintHops(testHops) {
 		t.Fatalf("fingerprint mismatch")
+	}
+}
+
+func TestBuildSCIONPath_EmptyHops(t *testing.T) {
+	_, err := BuildSCIONPath(&MockPathExtractor{}, []byte("[]"))
+	if err == nil {
+		t.Fatal("expected error for empty hops")
 	}
 }
 
@@ -117,29 +136,3 @@ func TestBuildSCIONPath_InvalidJSON(t *testing.T) {
 	}
 }
 
-// --- SnetPathExtractor.ExtractHops ---
-
-func TestSnetPathExtractor_DelegatesToMock(t *testing.T) {
-	raw, err := NewMockPath(testHops)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snet := &SnetPathExtractor{}
-	hops, err := snet.ExtractHops(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mock := &MockPathExtractor{}
-	wantHops, err := mock.ExtractHops(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hops) != len(wantHops) {
-		t.Fatalf("got %d hops, want %d", len(hops), len(wantHops))
-	}
-	for i := range hops {
-		if hops[i] != wantHops[i] {
-			t.Errorf("hop[%d]: got %+v, want %+v", i, hops[i], wantHops[i])
-		}
-	}
-}

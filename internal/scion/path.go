@@ -11,16 +11,22 @@ import (
 	"github.com/jurispath/jurispath/pkg/model"
 )
 
-// PathExtractor extracts AS hop information from SCION paths.
-// In production this wraps snet.Path; for testing we use MockPathExtractor.
+// PathExtractor extracts AS hop information from raw SCION path bytes.
 type PathExtractor interface {
 	ExtractHops(rawPath []byte) ([]model.ASHop, error)
 }
 
-// Fingerprint computes a SHA-256 fingerprint of a serialized path.
-func Fingerprint(raw []byte) string {
-	h := sha256.Sum256(raw)
-	return fmt.Sprintf("%x", h)
+// FingerprintHops computes a deterministic SHA-256 fingerprint from the hop
+// sequence. This is the canonical fingerprint used for path identity regardless
+// of whether the path came from mock data or real SCION metadata.
+func FingerprintHops(hops []model.ASHop) string {
+	var buf []byte
+	for _, h := range hops {
+		buf = append(buf, h.IA...)
+		buf = append(buf, '/')
+	}
+	hash := sha256.Sum256(buf)
+	return fmt.Sprintf("%x", hash)
 }
 
 // BuildSCIONPath constructs a SCIONPath from raw bytes using the given extractor.
@@ -31,7 +37,10 @@ func BuildSCIONPath(extractor PathExtractor, raw []byte) (*model.SCIONPath, erro
 		slog.Error("hop extraction failed", "raw_len", len(raw), "error", err)
 		return nil, fmt.Errorf("extracting hops: %w", err)
 	}
-	fp := Fingerprint(raw)
+	if len(hops) == 0 {
+		return nil, fmt.Errorf("no hops found in raw path")
+	}
+	fp := FingerprintHops(hops)
 	slog.Debug("SCION path built", "hops", len(hops), "fingerprint", fp)
 	return &model.SCIONPath{
 		Raw:         raw,
@@ -49,15 +58,6 @@ type SnetPathExtractor struct {
 // NewSnetPathExtractor creates a new SnetPathExtractor with the given daemon connector.
 func NewSnetPathExtractor(conn daemon.Connector) *SnetPathExtractor {
 	return &SnetPathExtractor{Conn: conn}
-}
-
-// ExtractHops implements PathExtractor for raw bytes. This is a fallback that
-// treats raw bytes as a JSON-encoded mock path for backward compatibility.
-// For real SCION paths, use ExtractHopsFromSnetPath instead.
-func (e *SnetPathExtractor) ExtractHops(rawPath []byte) ([]model.ASHop, error) {
-	// Delegate to mock-style JSON decoding as a fallback for raw bytes.
-	mock := &MockPathExtractor{}
-	return mock.ExtractHops(rawPath)
 }
 
 // ExtractHopsFromSnetPath reads path.Metadata().Interfaces and extracts
@@ -105,18 +105,8 @@ func BuildSCIONPathFromSnet(extractor *SnetPathExtractor, p snet.Path) (*model.S
 		return nil, fmt.Errorf("extracting hops from snet path: %w", err)
 	}
 
-	// Build a deterministic raw representation for fingerprinting.
-	// We serialize the hop sequence since the DataplanePath interface
-	// does not expose raw bytes directly.
-	var raw []byte
-	for _, h := range hops {
-		raw = append(raw, []byte(h.IA)...)
-		raw = append(raw, '/')
-	}
-
 	return &model.SCIONPath{
-		Raw:         raw,
 		Hops:        hops,
-		Fingerprint: Fingerprint(raw),
+		Fingerprint: FingerprintHops(hops),
 	}, nil
 }
