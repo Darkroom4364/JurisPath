@@ -1,6 +1,7 @@
 package dlt
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 )
@@ -72,6 +73,11 @@ func (ce *ConsensusEngine) RunRoundFromPending(tx *Transaction) (*ConsensusResul
 // proposeVoteCommitLocked runs the propose→vote→commit consensus phases.
 // Caller must hold ce.mu. The transaction must already be in the pending pool.
 func (ce *ConsensusEngine) proposeVoteCommitLocked(tx *Transaction) (*ConsensusResult, error) {
+	if len(ce.validators) == 0 {
+		ce.ledger.CleanupPending(tx.ID)
+		return &ConsensusResult{Confirmed: false, TxID: tx.ID},
+			fmt.Errorf("no validators configured")
+	}
 	proposer := ce.validators[0].ID
 	proposal, err := ce.ledger.ProposeBlock(proposer)
 	if err != nil {
