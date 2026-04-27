@@ -78,6 +78,16 @@ func TestReplayDetector_Cleanup(t *testing.T) {
 	}
 }
 
+func TestReplayDetector_FutureTimestampRejected(t *testing.T) {
+	rd := NewReplayDetector(30 * time.Second)
+
+	future := time.Now().Add(10 * time.Second)
+	err := rd.Check("fp-abc", 1, future)
+	if err == nil {
+		t.Fatal("future timestamp should be rejected")
+	}
+}
+
 func TestReplayDetector_DifferentFingerprints(t *testing.T) {
 	rd := NewReplayDetector(30 * time.Second)
 

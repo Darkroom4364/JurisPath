@@ -51,6 +51,12 @@ func (rd *ReplayDetector) Check(fingerprint string, seqNo uint64, timestamp time
 
 	slog.Debug("replay check", "fingerprint", fingerprint, "seq_no", seqNo)
 
+	// Reject future timestamps — prevents pre-seeding fingerprints
+	if timestamp.After(now) {
+		slog.Warn("future timestamp rejected", "fingerprint", fingerprint, "timestamp", timestamp, "now", now)
+		return fmt.Errorf("future timestamp: %v is ahead of current time", timestamp)
+	}
+
 	// Check timestamp validity window
 	if now.Sub(timestamp) > rd.window {
 		slog.Warn("message expired", "fingerprint", fingerprint, "age", now.Sub(timestamp), "window", rd.window)
