@@ -48,7 +48,8 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 type Server struct {
 	mux           *http.ServeMux
 	policies      []*policy.Policy
-	checkers      map[string]*pathcheck.Checker // policyID -> checker
+	checkers      map[string]*pathcheck.Checker    // policyID -> checker
+	filters       map[string]*pathcheck.PathFilter // policyID -> filter
 	receipts      receipt.Store
 	generator     *receipt.Generator
 	detector      *violation.Detector
@@ -79,6 +80,7 @@ func NewServer(
 		mux:       http.NewServeMux(),
 		policies:  policies,
 		checkers:  make(map[string]*pathcheck.Checker),
+		filters:   make(map[string]*pathcheck.PathFilter),
 		receipts:  rs,
 		generator: gen,
 		detector:  det,
@@ -94,6 +96,7 @@ func NewServer(
 
 	for _, p := range policies {
 		s.checkers[p.ID] = pathcheck.NewChecker(p)
+		s.filters[p.ID] = pathcheck.NewPathFilter(p)
 	}
 
 	// Start background audit writer
@@ -581,22 +584,14 @@ func (s *Server) handleFilterPaths(w http.ResponseWriter, r *http.Request) {
 
 	slog.Debug("path filtering requested", "policy_id", req.PolicyID, "candidate_paths", len(req.Paths))
 
-	// Find the policy.
-	var pol *policy.Policy
-	for _, p := range s.policies {
-		if p.ID == req.PolicyID {
-			pol = p
-			break
-		}
-	}
-	if pol == nil {
+	filter, ok := s.filters[req.PolicyID]
+	if !ok {
 		slog.Warn("unknown policy in filter-paths request", "policy_id", req.PolicyID)
 		s.audit("filter", map[string]any{"outcome": "error", "code": "UNKNOWN_POLICY", "policy_id": req.PolicyID})
 		writeError(w, http.StatusBadRequest, "UNKNOWN_POLICY", fmt.Sprintf("unknown policy: %s", req.PolicyID))
 		return
 	}
 
-	filter := pathcheck.NewPathFilter(pol)
 	result := filter.FilterPaths(req.Paths)
 
 	slog.Debug("path filtering complete", "policy_id", req.PolicyID, "compliant", len(result.Compliant), "non_compliant", len(result.NonCompliant))

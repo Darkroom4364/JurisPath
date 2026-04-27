@@ -41,33 +41,11 @@ func (c *Checker) Check(path *model.SCIONPath) (*CheckResult, error) {
 		return nil, fmt.Errorf("path has no hops")
 	}
 
-	allowed := make(map[uint16]bool)
-	for _, isd := range c.policy.AllowedISDs {
-		allowed[isd] = true
-	}
-
-	var offending []model.ASHop
-
-	switch c.policy.Mode {
-	case "strict":
-		// All hops must be within allowed ISDs
-		for _, hop := range path.Hops {
-			if !allowed[hop.ISD] {
-				offending = append(offending, hop)
-			}
-		}
-	case "relaxed":
-		// Only first and last hops must be within allowed ISDs
-		first, last := path.Hops[0], path.Hops[len(path.Hops)-1]
-		if !allowed[first.ISD] {
-			offending = append(offending, first)
-		}
-		if !allowed[last.ISD] {
-			offending = append(offending, last)
-		}
-	default:
+	if c.policy.Mode != "strict" && c.policy.Mode != "relaxed" {
 		return nil, fmt.Errorf("unknown policy mode: %s", c.policy.Mode)
 	}
+
+	offending := CheckHopsCompliant(path.Hops, c.policy.AllowedISDs, c.policy.Mode)
 
 	if len(offending) > 0 {
 		slog.Debug("path non-compliant", "policy_id", c.policy.ID, "offending_hops", len(offending))

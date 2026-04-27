@@ -34,13 +34,8 @@ func (f *PathFilter) FilterPaths(paths []model.SCIONPath) *FilterResult {
 		NonCompliant: []model.SCIONPath{},
 	}
 
-	allowed := make(map[uint16]bool)
-	for _, isd := range f.policy.AllowedISDs {
-		allowed[isd] = true
-	}
-
 	for _, p := range paths {
-		if f.isCompliant(p, allowed) {
+		if len(p.Hops) > 0 && len(CheckHopsCompliant(p.Hops, f.policy.AllowedISDs, f.policy.Mode)) == 0 {
 			result.Compliant = append(result.Compliant, p)
 		} else {
 			result.NonCompliant = append(result.NonCompliant, p)
@@ -49,29 +44,4 @@ func (f *PathFilter) FilterPaths(paths []model.SCIONPath) *FilterResult {
 
 	slog.Debug("path filter results", "policy_id", f.policy.ID, "compliant", len(result.Compliant), "non_compliant", len(result.NonCompliant))
 	return result
-}
-
-// isCompliant checks whether a single path satisfies the policy.
-func (f *PathFilter) isCompliant(path model.SCIONPath, allowed map[uint16]bool) bool {
-	if len(path.Hops) == 0 {
-		return false
-	}
-
-	switch f.policy.Mode {
-	case "strict":
-		// All hops must be within allowed ISDs.
-		for _, hop := range path.Hops {
-			if !allowed[hop.ISD] {
-				return false
-			}
-		}
-		return true
-	case "relaxed":
-		// Only first and last hops must be within allowed ISDs.
-		first := path.Hops[0]
-		last := path.Hops[len(path.Hops)-1]
-		return allowed[first.ISD] && allowed[last.ISD]
-	default:
-		return false
-	}
 }
