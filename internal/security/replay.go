@@ -9,6 +9,9 @@ import (
 
 const DefaultValidityWindow = 30 * time.Second
 
+// MaxClockSkew is the maximum clock drift tolerated between nodes.
+const MaxClockSkew = 5 * time.Second
+
 // ReplayDetector defends against path replay attacks by tracking seen
 // fingerprint+seqNo pairs within a configurable validity window.
 type ReplayDetector struct {
@@ -51,10 +54,13 @@ func (rd *ReplayDetector) Check(fingerprint string, seqNo uint64, timestamp time
 
 	slog.Debug("replay check", "fingerprint", fingerprint, "seq_no", seqNo)
 
-	// Reject future timestamps — prevents pre-seeding fingerprints
-	if timestamp.After(now) {
+	// Reject future timestamps beyond clock-skew tolerance — prevents pre-seeding fingerprints
+	if timestamp.After(now.Add(MaxClockSkew)) {
 		slog.Warn("future timestamp rejected", "fingerprint", fingerprint, "timestamp", timestamp, "now", now)
-		return fmt.Errorf("future timestamp: %v is ahead of current time", timestamp)
+		return fmt.Errorf("future timestamp: %v is ahead of current time (skew exceeds %v)", timestamp, MaxClockSkew)
+	}
+	if timestamp.After(now) {
+		slog.Debug("timestamp within clock-skew tolerance", "fingerprint", fingerprint, "skew", timestamp.Sub(now))
 	}
 
 	// Check timestamp validity window
