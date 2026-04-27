@@ -60,7 +60,10 @@ func setupTestEnv(t *testing.T) *testEnv {
 
 	srv := NewServer([]*policy.Policy{pol}, gen, ext, ledger, consensus, rs, det, al, t.TempDir())
 	ts := httptest.NewServer(srv.mux)
-	t.Cleanup(ts.Close)
+	t.Cleanup(func() {
+		ts.Close()
+		srv.Close()
+	})
 
 	return &testEnv{server: ts, ledger: ledger}
 }
