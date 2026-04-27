@@ -87,16 +87,16 @@ func NewGeneratorFromFile(path string) (*Generator, error) {
 	buf = append(buf, priv.Seed()...)
 
 	if _, err := tmpFile.Write(buf); err != nil {
-		tmpFile.Close()
+		tmpFile.Close() //nolint:errcheck // cleanup on error
 		os.Remove(tmpPath)
 		return nil, fmt.Errorf("writing oracle key: %w", err)
 	}
 	if err := tmpFile.Chmod(0600); err != nil {
-		tmpFile.Close()
+		tmpFile.Close() //nolint:errcheck // cleanup on error
 		os.Remove(tmpPath)
 		return nil, fmt.Errorf("setting key file permissions: %w", err)
 	}
-	tmpFile.Close()
+	tmpFile.Close() //nolint:errcheck // flushed via Write above
 
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)

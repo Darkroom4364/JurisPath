@@ -96,7 +96,7 @@ func NewBoltViolationStore(dbPath string) (*BoltViolationStore, error) {
 		return nil
 	})
 	if err != nil {
-		db.Close()
+		db.Close() //nolint:errcheck // cleanup on init failure
 		return nil, fmt.Errorf("creating buckets: %w", err)
 	}
 	return &BoltViolationStore{db: db}, nil

@@ -1,0 +1,20 @@
+version: "2"
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - (*encoding/json.Encoder).Encode
+        - (*encoding/json.Decoder).Decode
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - os.Remove
+  exclusions:
+    rules:
+      - linters:
+          - errcheck
+        text: '\.Close`'
+        path: '_test\.go$'

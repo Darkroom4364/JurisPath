@@ -124,12 +124,12 @@ func NewBoltStore(dbPath string) (*BoltStore, error) {
 		return nil
 	})
 	if err != nil {
-		db.Close()
+		db.Close() //nolint:errcheck // cleanup on init failure
 		return nil, fmt.Errorf("creating buckets: %w", err)
 	}
 	s := &BoltStore{db: db}
 	if err := s.backfillSeqBucket(); err != nil {
-		db.Close()
+		db.Close() //nolint:errcheck // cleanup on init failure
 		return nil, fmt.Errorf("backfilling seq bucket: %w", err)
 	}
 	return s, nil
