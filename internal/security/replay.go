@@ -20,6 +20,9 @@ type ReplayDetector struct {
 
 	// lastSeqNo tracks the highest seqNo seen per fingerprint (source)
 	lastSeqNo map[string]uint64
+
+	// lastCleanup tracks when cleanupLocked was last run to avoid O(n) scans on every Check
+	lastCleanup time.Time
 }
 
 // NewReplayDetector creates a replay detector with the given validity window.
@@ -77,6 +80,12 @@ func (rd *ReplayDetector) Check(fingerprint string, seqNo uint64, timestamp time
 	rd.seen[fingerprint][seqNo] = timestamp
 	rd.lastSeqNo[fingerprint] = seqNo
 
+	// Prune expired entries periodically to prevent unbounded growth
+	if now.Sub(rd.lastCleanup) >= rd.window {
+		rd.cleanupLocked()
+		rd.lastCleanup = now
+	}
+
 	return nil
 }
 
@@ -84,7 +93,11 @@ func (rd *ReplayDetector) Check(fingerprint string, seqNo uint64, timestamp time
 func (rd *ReplayDetector) Cleanup() {
 	rd.mu.Lock()
 	defer rd.mu.Unlock()
+	rd.cleanupLocked()
+}
 
+// cleanupLocked removes expired entries. Caller must hold rd.mu.
+func (rd *ReplayDetector) cleanupLocked() {
 	cutoff := time.Now().Add(-rd.window)
 
 	for fp, seqNos := range rd.seen {

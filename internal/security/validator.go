@@ -79,15 +79,19 @@ func (rv *ReceiptValidator) ValidateReceiptChain(receipts []*model.ComplianceRec
 				)
 			}
 
-			// Verify hash chain — PreviousHash should equal sha256(prev.Signature)
-			if r.PreviousHash != nil {
-				expectedHash := sha256.Sum256(prev.Signature)
-				if !bytes.Equal(r.PreviousHash, expectedHash[:]) {
-					return fmt.Errorf(
-						"receipt chain hash mismatch at index %d: expected %x, got %x",
-						i, expectedHash[:], r.PreviousHash,
-					)
-				}
+			// Verify hash chain — PreviousHash must be non-nil and equal sha256(prev.Signature)
+			if r.PreviousHash == nil {
+				return fmt.Errorf(
+					"receipt chain broken at index %d: PreviousHash is nil",
+					i,
+				)
+			}
+			expectedHash := sha256.Sum256(prev.Signature)
+			if !bytes.Equal(r.PreviousHash, expectedHash[:]) {
+				return fmt.Errorf(
+					"receipt chain hash mismatch at index %d: expected %x, got %x",
+					i, expectedHash[:], r.PreviousHash,
+				)
 			}
 		}
 
