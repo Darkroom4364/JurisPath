@@ -87,7 +87,7 @@ func sendFilterPaths(baseURL, policyID string, paths []model.SCIONPath) {
 	if err != nil {
 		log.Fatalf("filter-paths request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body cleanup
 
 	var result struct {
 		Compliant    []model.SCIONPath `json:"compliant"`
@@ -120,7 +120,7 @@ func sendCheck(baseURL, txID, policyID string, hops []model.ASHop) {
 	if err != nil {
 		log.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body cleanup
 
 	var result model.PolicyResult
 	json.NewDecoder(resp.Body).Decode(&result)

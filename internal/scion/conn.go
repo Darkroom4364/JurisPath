@@ -25,26 +25,26 @@ func NewSCIONNetwork(ctx context.Context, daemonAddr string) (*snet.SCIONNetwork
 
 	localIA, err := conn.LocalIA(ctx)
 	if err != nil {
-		conn.Close()
+		conn.Close() //nolint:errcheck // cleanup on error
 		return nil, 0, fmt.Errorf("querying local IA: %w", err)
 	}
 	slog.Debug("local IA retrieved", "ia", localIA)
 
 	portStart, portEnd, err := conn.PortRange(ctx)
 	if err != nil {
-		conn.Close()
+		conn.Close() //nolint:errcheck // cleanup on error
 		return nil, 0, fmt.Errorf("querying port range: %w", err)
 	}
 	slog.Debug("port range retrieved", "start", portStart, "end", portEnd)
 
 	interfaces, err := conn.Interfaces(ctx)
 	if err != nil {
-		conn.Close()
+		conn.Close() //nolint:errcheck // cleanup on error
 		return nil, 0, fmt.Errorf("querying interfaces: %w", err)
 	}
 	slog.Debug("interfaces retrieved", "count", len(interfaces))
 
-	conn.Close()
+	conn.Close() //nolint:errcheck // done with daemon conn
 
 	topo := snet.Topology{
 		LocalIA: localIA,

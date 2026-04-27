@@ -98,7 +98,7 @@ func main() {
 		slog.Error("failed to open receipt store", "error", err)
 		os.Exit(1)
 	}
-	defer receiptStore.Close()
+	defer receiptStore.Close() //nolint:errcheck // shutdown cleanup
 	slog.Debug("receipt store opened", "path", filepath.Join(cfg.DataDir, "receipts.db"))
 
 	if err := gen.SeedChain(receiptStore); err != nil {
@@ -111,7 +111,7 @@ func main() {
 		slog.Error("failed to open violation store", "error", err)
 		os.Exit(1)
 	}
-	defer violationStore.Close()
+	defer violationStore.Close() //nolint:errcheck // shutdown cleanup
 	slog.Debug("violation store opened", "path", filepath.Join(cfg.DataDir, "violations.db"))
 
 	detector := violation.NewDetector(violationStore)
@@ -121,7 +121,7 @@ func main() {
 		slog.Error("failed to open audit log", "error", err)
 		os.Exit(1)
 	}
-	defer auditLog.Close()
+	defer auditLog.Close() //nolint:errcheck // shutdown cleanup
 	slog.Debug("audit log opened", "path", filepath.Join(cfg.DataDir, "audit.db"))
 
 	// Start API server

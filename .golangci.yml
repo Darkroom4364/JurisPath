@@ -17,3 +17,4 @@ linters:
       - linters:
           - errcheck
         text: '\.Close`'
+        path: '_test\.go$'

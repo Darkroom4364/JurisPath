@@ -34,7 +34,7 @@ func NewAuditLog(dbPath string) (*AuditLog, error) {
 		return err
 	})
 	if err != nil {
-		db.Close()
+		db.Close() //nolint:errcheck // cleanup on init failure
 		return nil, fmt.Errorf("creating audit bucket: %w", err)
 	}
 	return &AuditLog{db: db}, nil
