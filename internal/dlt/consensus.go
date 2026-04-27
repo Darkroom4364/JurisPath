@@ -117,6 +117,7 @@ func (ce *ConsensusEngine) proposeVoteCommitLocked(tx *Transaction) (*ConsensusR
 			Round:       proposal.Round,
 		}
 		if err := ce.ledger.Commit(commitMsg); err != nil {
+			ce.ledger.CleanupPending(tx.ID)
 			return &ConsensusResult{
 				Confirmed: false,
 				Round:     proposal.Round,
