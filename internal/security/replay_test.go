@@ -78,6 +78,26 @@ func TestReplayDetector_Cleanup(t *testing.T) {
 	}
 }
 
+func TestReplayDetector_FutureTimestampWithinSkew(t *testing.T) {
+	rd := NewReplayDetector(30 * time.Second)
+
+	slight := time.Now().Add(2 * time.Second)
+	err := rd.Check("fp-abc", 1, slight)
+	if err != nil {
+		t.Fatalf("timestamp within clock-skew tolerance should pass, got: %v", err)
+	}
+}
+
+func TestReplayDetector_FutureTimestampBeyondSkew(t *testing.T) {
+	rd := NewReplayDetector(30 * time.Second)
+
+	future := time.Now().Add(MaxClockSkew + 5*time.Second)
+	err := rd.Check("fp-abc", 1, future)
+	if err == nil {
+		t.Fatal("future timestamp beyond skew tolerance should be rejected")
+	}
+}
+
 func TestReplayDetector_DifferentFingerprints(t *testing.T) {
 	rd := NewReplayDetector(30 * time.Second)
 

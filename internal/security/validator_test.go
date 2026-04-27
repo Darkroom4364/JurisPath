@@ -27,6 +27,90 @@ func issueTestReceipt(t *testing.T, gen *receipt.Generator, txID, policyID strin
 	return rcpt
 }
 
+// --- ValidateReceipt (direct) ---
+
+func TestValidateReceipt_Valid(t *testing.T) {
+	gen, err := receipt.NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+
+	r := issueTestReceipt(t, gen, "tx-1", "policy-1")
+	rv := NewReceiptValidator(5 * time.Minute)
+	if err := rv.ValidateReceipt(r); err != nil {
+		t.Fatalf("valid receipt should pass: %v", err)
+	}
+}
+
+func TestValidateReceipt_TamperedSignature(t *testing.T) {
+	gen, err := receipt.NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+
+	r := issueTestReceipt(t, gen, "tx-1", "policy-1")
+	r.PolicyID = "tampered"
+
+	rv := NewReceiptValidator(5 * time.Minute)
+	err = rv.ValidateReceipt(r)
+	if err == nil {
+		t.Fatal("tampered receipt should fail validation")
+	}
+	if !strings.Contains(err.Error(), "invalid signature") {
+		t.Fatalf("expected 'invalid signature' error, got: %v", err)
+	}
+}
+
+func TestValidateReceipt_Expired(t *testing.T) {
+	gen, err := receipt.NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+
+	r := issueTestReceipt(t, gen, "tx-1", "policy-1")
+
+	// Use a very short maxAge so the receipt is already expired
+	rv := NewReceiptValidator(1 * time.Nanosecond)
+	// Small sleep to guarantee expiration
+	time.Sleep(time.Millisecond)
+	err = rv.ValidateReceipt(r)
+	if err == nil {
+		t.Fatal("expired receipt should fail validation")
+	}
+	if !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expected 'expired' error, got: %v", err)
+	}
+}
+
+func TestValidateReceipt_Replay(t *testing.T) {
+	gen, err := receipt.NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+
+	r1 := issueTestReceipt(t, gen, "tx-1", "policy-1")
+	r2 := issueTestReceipt(t, gen, "tx-2", "policy-1")
+
+	rv := NewReceiptValidator(5 * time.Minute)
+	if err := rv.ValidateReceipt(r1); err != nil {
+		t.Fatalf("first receipt should pass: %v", err)
+	}
+	if err := rv.ValidateReceipt(r2); err != nil {
+		t.Fatalf("second receipt should pass: %v", err)
+	}
+
+	// Replay r1 — same oracle fingerprint + seqNo
+	err = rv.ValidateReceipt(r1)
+	if err == nil {
+		t.Fatal("replayed receipt should fail validation")
+	}
+	if !strings.Contains(err.Error(), "replay") {
+		t.Fatalf("expected 'replay' error, got: %v", err)
+	}
+}
+
+// --- ValidateReceiptChain ---
+
 func TestValidateReceiptChain_Valid(t *testing.T) {
 	gen, err := receipt.NewGenerator()
 	if err != nil {
