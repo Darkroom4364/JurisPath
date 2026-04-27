@@ -11,8 +11,7 @@ import (
 	"github.com/jurispath/jurispath/pkg/model"
 )
 
-// PathExtractor extracts AS hop information from SCION paths.
-// In production this wraps snet.Path; for testing we use MockPathExtractor.
+// PathExtractor extracts AS hop information from raw SCION path bytes.
 type PathExtractor interface {
 	ExtractHops(rawPath []byte) ([]model.ASHop, error)
 }
@@ -37,6 +36,9 @@ func BuildSCIONPath(extractor PathExtractor, raw []byte) (*model.SCIONPath, erro
 	if err != nil {
 		slog.Error("hop extraction failed", "raw_len", len(raw), "error", err)
 		return nil, fmt.Errorf("extracting hops: %w", err)
+	}
+	if len(hops) == 0 {
+		return nil, fmt.Errorf("no hops found in raw path")
 	}
 	fp := FingerprintHops(hops)
 	slog.Debug("SCION path built", "hops", len(hops), "fingerprint", fp)

@@ -22,9 +22,26 @@ func TestFingerprintHops_Deterministic(t *testing.T) {
 }
 
 func TestFingerprintHops_DifferentHopsDiffer(t *testing.T) {
-	other := []model.ASHop{{IA: "3-ff00:0:310", ISD: 3, AS: "ff00:0:310"}}
+	other := []model.ASHop{
+		{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"},
+		{IA: "2-ff00:0:210", ISD: 2, AS: "ff00:0:210"},
+	}
 	if FingerprintHops(testHops) == FingerprintHops(other) {
 		t.Fatal("different hops should produce different fingerprints")
+	}
+}
+
+func TestFingerprintHops_MockBuildParity(t *testing.T) {
+	raw, err := NewMockPath(testHops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := BuildSCIONPath(&MockPathExtractor{}, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Fingerprint != FingerprintHops(testHops) {
+		t.Fatalf("BuildSCIONPath fingerprint %s != FingerprintHops %s", p.Fingerprint, FingerprintHops(testHops))
 	}
 }
 
@@ -102,6 +119,13 @@ func TestBuildSCIONPath_ValidHops(t *testing.T) {
 	}
 	if p.Fingerprint != FingerprintHops(testHops) {
 		t.Fatalf("fingerprint mismatch")
+	}
+}
+
+func TestBuildSCIONPath_EmptyHops(t *testing.T) {
+	_, err := BuildSCIONPath(&MockPathExtractor{}, []byte("[]"))
+	if err == nil {
+		t.Fatal("expected error for empty hops")
 	}
 }
 
