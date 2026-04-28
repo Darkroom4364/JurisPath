@@ -16,9 +16,11 @@ type ValidatorNode struct {
 	ID           string
 	Ledger       *Ledger
 	Transport    ValidatorTransport
-	VoteTimeout  time.Duration // timeout waiting for remote votes (default 5s)
+	VoteTimeout  time.Duration    // timeout waiting for remote votes (default 5s)
+	Ready        chan struct{}     // closed by Run once the message loop starts
 
 	validators []ValidatorState
+	pendingMsgs map[string][]*ConsensusMessage // buffered messages by txID
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -27,10 +29,12 @@ type ValidatorNode struct {
 // NewValidatorNode creates a node for the given validator.
 func NewValidatorNode(id string, validators []ValidatorState, transport ValidatorTransport) *ValidatorNode {
 	return &ValidatorNode{
-		ID:         id,
-		Ledger:     NewLedger(validators),
-		Transport:  transport,
-		validators: validators,
+		ID:          id,
+		Ledger:      NewLedger(validators),
+		Transport:   transport,
+		Ready:       make(chan struct{}),
+		validators:  validators,
+		pendingMsgs: make(map[string][]*ConsensusMessage),
 	}
 }
 
@@ -44,6 +48,8 @@ func (n *ValidatorNode) Run(ctx context.Context) error {
 
 	slog.Info("validator node started", "id", n.ID)
 	defer slog.Info("validator node stopped", "id", n.ID)
+
+	close(n.Ready)
 
 	for {
 		msg, pathInfo, err := n.Transport.Receive(ctx)
@@ -164,12 +170,28 @@ func (n *ValidatorNode) ProposeSettlement(ctx context.Context, tx *Transaction) 
 	defer voteCancel()
 
 	collected := 0
+
+	// Drain any votes for this tx that arrived while we were busy.
+	if pending, ok := n.pendingMsgs[tx.ID]; ok {
+		for _, pm := range pending {
+			if pm.Type == MsgVote {
+				collected++
+				if string(pm.Payload) == "yes" {
+					yesVotes++
+				}
+			}
+		}
+		delete(n.pendingMsgs, tx.ID)
+	}
+
 	for collected < votesNeeded {
 		msg, _, err := n.Transport.Receive(voteCtx)
 		if err != nil {
 			break // timeout or context cancelled
 		}
 		if msg.Type != MsgVote || msg.TxID != tx.ID {
+			// Buffer for later processing instead of dropping.
+			n.pendingMsgs[msg.TxID] = append(n.pendingMsgs[msg.TxID], msg)
 			continue
 		}
 		collected++

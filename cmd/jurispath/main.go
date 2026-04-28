@@ -111,10 +111,12 @@ func main() {
 		}
 		peers, err := dlt.ParseSCIONPeers(cfg.ValidatorID, validators)
 		if err != nil {
+			conn.Close() //nolint:errcheck // cleanup on setup failure
 			slog.Error("failed to parse SCION peers", "error", err)
 			os.Exit(1)
 		}
 		transport := dlt.NewSCIONTransport(cfg.ValidatorID, conn, peers)
+		// conn is now owned by transport; transport.Close() will close it.
 		ledger = dlt.NewLedger(validators)
 		consensus = dlt.NewConsensusEngineWithTransport(ledger, validators, transport)
 		slog.Info("SCION consensus mode enabled", "validator", cfg.ValidatorID)

@@ -36,8 +36,13 @@ func startNodes(t *testing.T, validators []ValidatorState) (map[string]*Validato
 		go node.Run(ctx) //nolint:errcheck
 	}
 
-	// Brief pause for goroutines to start receiving.
-	time.Sleep(10 * time.Millisecond)
+	// Wait for all non-proposer nodes to be ready.
+	for id, node := range nodes {
+		if id == ids[0] {
+			continue
+		}
+		<-node.Ready
+	}
 
 	return nodes, transports
 }
