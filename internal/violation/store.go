@@ -7,6 +7,7 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
+	"github.com/jurispath/jurispath/internal/boltutil"
 	"github.com/jurispath/jurispath/pkg/model"
 )
 
@@ -82,22 +83,9 @@ type BoltViolationStore struct {
 
 // NewBoltViolationStore opens or creates a BoltDB-backed violation store.
 func NewBoltViolationStore(dbPath string) (*BoltViolationStore, error) {
-	db, err := bolt.Open(dbPath, 0600, nil)
+	db, err := boltutil.OpenAndInit(dbPath, violationsBucket, violationsByTxBucket)
 	if err != nil {
-		return nil, fmt.Errorf("opening bolt db: %w", err)
-	}
-	err = db.Update(func(tx *bolt.Tx) error {
-		if _, err := tx.CreateBucketIfNotExists(violationsBucket); err != nil {
-			return err
-		}
-		if _, err := tx.CreateBucketIfNotExists(violationsByTxBucket); err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		db.Close() //nolint:errcheck // cleanup on init failure
-		return nil, fmt.Errorf("creating buckets: %w", err)
+		return nil, err
 	}
 	return &BoltViolationStore{db: db}, nil
 }
@@ -121,65 +109,17 @@ func (s *BoltViolationStore) Append(v *model.Violation) error {
 }
 
 func (s *BoltViolationStore) GetByID(id string) (*model.Violation, error) {
-	var v model.Violation
-	err := s.db.View(func(tx *bolt.Tx) error {
-		data := tx.Bucket(violationsBucket).Get([]byte(id))
-		if data == nil {
-			return nil
-		}
-		return json.Unmarshal(data, &v)
-	})
-	if err != nil {
-		return nil, err
-	}
-	if v.ID == "" {
-		return nil, nil
-	}
-	return &v, nil
+	return boltutil.GetByKey[model.Violation](s.db, violationsBucket, id)
 }
 
 func (s *BoltViolationStore) GetByTxID(txID string) (*model.Violation, error) {
-	var v model.Violation
-	err := s.db.View(func(tx *bolt.Tx) error {
-		violationID := tx.Bucket(violationsByTxBucket).Get([]byte(txID))
-		if violationID == nil {
-			return nil
-		}
-		data := tx.Bucket(violationsBucket).Get(violationID)
-		if data == nil {
-			return nil
-		}
-		return json.Unmarshal(data, &v)
-	})
-	if err != nil {
-		return nil, err
-	}
-	if v.ID == "" {
-		return nil, nil
-	}
-	return &v, nil
+	return boltutil.GetViaIndex[model.Violation](s.db, violationsByTxBucket, violationsBucket, txID)
 }
 
 func (s *BoltViolationStore) List() ([]*model.Violation, error) {
-	var out []*model.Violation
-	err := s.db.View(func(tx *bolt.Tx) error {
-		return tx.Bucket(violationsBucket).ForEach(func(k, v []byte) error {
-			var viol model.Violation
-			if err := json.Unmarshal(v, &viol); err != nil {
-				return err
-			}
-			out = append(out, &viol)
-			return nil
-		})
-	})
-	return out, err
+	return boltutil.ListAll[model.Violation](s.db, violationsBucket)
 }
 
 func (s *BoltViolationStore) Count() (int, error) {
-	var count int
-	err := s.db.View(func(tx *bolt.Tx) error {
-		count = tx.Bucket(violationsBucket).Stats().KeyN
-		return nil
-	})
-	return count, err
+	return boltutil.CountKeys(s.db, violationsBucket)
 }
