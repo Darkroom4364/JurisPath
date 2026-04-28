@@ -8,6 +8,7 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
+	"github.com/jurispath/jurispath/internal/boltutil"
 	"github.com/jurispath/jurispath/pkg/model"
 )
 
@@ -107,25 +108,9 @@ type BoltStore struct {
 
 // NewBoltStore opens or creates a BoltDB-backed receipt store.
 func NewBoltStore(dbPath string) (*BoltStore, error) {
-	db, err := bolt.Open(dbPath, 0600, nil)
+	db, err := boltutil.OpenAndInit(dbPath, receiptsBucket, receiptsByTxBucket, seqBucket)
 	if err != nil {
-		return nil, fmt.Errorf("opening bolt db: %w", err)
-	}
-	err = db.Update(func(tx *bolt.Tx) error {
-		if _, err := tx.CreateBucketIfNotExists(receiptsBucket); err != nil {
-			return err
-		}
-		if _, err := tx.CreateBucketIfNotExists(receiptsByTxBucket); err != nil {
-			return err
-		}
-		if _, err := tx.CreateBucketIfNotExists(seqBucket); err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		db.Close() //nolint:errcheck // cleanup on init failure
-		return nil, fmt.Errorf("creating buckets: %w", err)
+		return nil, err
 	}
 	s := &BoltStore{db: db}
 	if err := s.backfillSeqBucket(); err != nil {
@@ -189,67 +174,19 @@ func (s *BoltStore) Append(r *model.ComplianceReceipt) error {
 }
 
 func (s *BoltStore) GetByID(id string) (*model.ComplianceReceipt, error) {
-	var r model.ComplianceReceipt
-	err := s.db.View(func(tx *bolt.Tx) error {
-		data := tx.Bucket(receiptsBucket).Get([]byte(id))
-		if data == nil {
-			return nil
-		}
-		return json.Unmarshal(data, &r)
-	})
-	if err != nil {
-		return nil, err
-	}
-	if r.ID == "" {
-		return nil, nil
-	}
-	return &r, nil
+	return boltutil.GetByKey[model.ComplianceReceipt](s.db, receiptsBucket, id)
 }
 
 func (s *BoltStore) GetByTxID(txID string) (*model.ComplianceReceipt, error) {
-	var r model.ComplianceReceipt
-	err := s.db.View(func(tx *bolt.Tx) error {
-		receiptID := tx.Bucket(receiptsByTxBucket).Get([]byte(txID))
-		if receiptID == nil {
-			return nil
-		}
-		data := tx.Bucket(receiptsBucket).Get(receiptID)
-		if data == nil {
-			return nil
-		}
-		return json.Unmarshal(data, &r)
-	})
-	if err != nil {
-		return nil, err
-	}
-	if r.ID == "" {
-		return nil, nil
-	}
-	return &r, nil
+	return boltutil.GetViaIndex[model.ComplianceReceipt](s.db, receiptsByTxBucket, receiptsBucket, txID)
 }
 
 func (s *BoltStore) List() ([]*model.ComplianceReceipt, error) {
-	var out []*model.ComplianceReceipt
-	err := s.db.View(func(tx *bolt.Tx) error {
-		return tx.Bucket(receiptsBucket).ForEach(func(k, v []byte) error {
-			var r model.ComplianceReceipt
-			if err := json.Unmarshal(v, &r); err != nil {
-				return err
-			}
-			out = append(out, &r)
-			return nil
-		})
-	})
-	return out, err
+	return boltutil.ListAll[model.ComplianceReceipt](s.db, receiptsBucket)
 }
 
 func (s *BoltStore) Count() (int, error) {
-	var count int
-	err := s.db.View(func(tx *bolt.Tx) error {
-		count = tx.Bucket(receiptsBucket).Stats().KeyN
-		return nil
-	})
-	return count, err
+	return boltutil.CountKeys(s.db, receiptsBucket)
 }
 
 func (s *BoltStore) Last() (*model.ComplianceReceipt, error) {
