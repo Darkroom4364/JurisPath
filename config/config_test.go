@@ -56,6 +56,29 @@ func TestValidate_MissingDir(t *testing.T) {
 	}
 }
 
+func TestValidate_TLSPartial(t *testing.T) {
+	c := &Config{PolicyDir: t.TempDir(), TLSCert: "cert.pem"}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error when TLSCert set without TLSKey")
+	}
+	c = &Config{PolicyDir: t.TempDir(), TLSKey: "key.pem"}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error when TLSKey set without TLSCert")
+	}
+}
+
+func TestTLSEnabled(t *testing.T) {
+	c := &Config{}
+	if c.TLSEnabled() {
+		t.Error("TLSEnabled should be false when both are empty")
+	}
+	c.TLSCert = "cert.pem"
+	c.TLSKey = "key.pem"
+	if !c.TLSEnabled() {
+		t.Error("TLSEnabled should be true when both are set")
+	}
+}
+
 func TestLoadValidators_Valid(t *testing.T) {
 	content := `
 - id: CH

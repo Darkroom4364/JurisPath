@@ -15,6 +15,8 @@ type Config struct {
 	DataDir       string
 	LogLevel      string // "debug", "info", "warn", "error"
 	OracleKeyPath string
+	TLSCert        string // path to TLS certificate file (enables HTTPS)
+	TLSKey         string // path to TLS private key file
 	ValidatorsFile string // path to validators.yaml
 	SCIONMode      bool   // true = validators communicate over SCION
 	SCIONDaemon    string // SCION daemon address (e.g. "127.0.0.1:30255")
@@ -30,6 +32,8 @@ func Load() *Config {
 		DataDir:       envOr("JURISPATH_DATA_DIR", "data/"),
 		LogLevel:      envOr("JURISPATH_LOG_LEVEL", "info"),
 		OracleKeyPath:  envOr("JURISPATH_ORACLE_KEY", "data/oracle.key"),
+		TLSCert:        os.Getenv("JURISPATH_TLS_CERT"),
+		TLSKey:         os.Getenv("JURISPATH_TLS_KEY"),
 		ValidatorsFile: envOr("JURISPATH_VALIDATORS", "validators.yaml"),
 		SCIONMode:      os.Getenv("JURISPATH_SCION_MODE") == "true",
 		SCIONDaemon:   envOr("JURISPATH_SCION_DAEMON", "127.0.0.1:30255"),
@@ -37,10 +41,18 @@ func Load() *Config {
 	}
 }
 
+// TLSEnabled returns true when both TLS cert and key paths are configured.
+func (c *Config) TLSEnabled() bool {
+	return c.TLSCert != "" && c.TLSKey != ""
+}
+
 // Validate checks that required paths exist.
 func (c *Config) Validate() error {
 	if _, err := os.Stat(c.PolicyDir); err != nil {
 		return fmt.Errorf("policy directory %q: %w", c.PolicyDir, err)
+	}
+	if (c.TLSCert != "") != (c.TLSKey != "") {
+		return fmt.Errorf("both JURISPATH_TLS_CERT and JURISPATH_TLS_KEY must be set, or neither")
 	}
 	return nil
 }
