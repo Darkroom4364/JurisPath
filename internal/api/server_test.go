@@ -2,11 +2,14 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jurispath/jurispath/internal/audit"
 	"github.com/jurispath/jurispath/internal/dlt"
@@ -469,6 +472,248 @@ func TestCheckInvalidBody(t *testing.T) {
 	}
 	if result["code"] != "INVALID_REQUEST" {
 		t.Fatalf("expected code INVALID_REQUEST, got %v", result["code"])
+	}
+}
+
+// --- List / read-only handlers ---
+
+func TestListReceipts_Empty(t *testing.T) {
+	env := setupTestEnv(t)
+
+	resp, err := http.Get(env.server.URL + "/api/receipts")
+	if err != nil {
+		t.Fatalf("GET /api/receipts: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var receipts []any
+	json.NewDecoder(resp.Body).Decode(&receipts)
+	if len(receipts) != 0 {
+		t.Fatalf("expected 0 receipts, got %d", len(receipts))
+	}
+}
+
+func TestListReceipts_AfterCheck(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// Issue a compliant check to generate a receipt
+	postCheck(t, env.server.URL, CheckRequest{
+		TransactionID: "tx-1",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	})
+
+	resp, err := http.Get(env.server.URL + "/api/receipts")
+	if err != nil {
+		t.Fatalf("GET /api/receipts: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var receipts []any
+	json.NewDecoder(resp.Body).Decode(&receipts)
+	if len(receipts) != 1 {
+		t.Fatalf("expected 1 receipt, got %d", len(receipts))
+	}
+}
+
+func TestListViolations_Empty(t *testing.T) {
+	env := setupTestEnv(t)
+
+	resp, err := http.Get(env.server.URL + "/api/violations")
+	if err != nil {
+		t.Fatalf("GET /api/violations: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var violations []any
+	json.NewDecoder(resp.Body).Decode(&violations)
+	if len(violations) != 0 {
+		t.Fatalf("expected 0 violations, got %d", len(violations))
+	}
+}
+
+func TestListViolations_AfterCheck(t *testing.T) {
+	env := setupTestEnv(t)
+
+	postCheck(t, env.server.URL, CheckRequest{
+		TransactionID: "tx-bad",
+		PolicyID:      "test-policy",
+		RawPath:       nonCompliantPath(t),
+	})
+
+	resp, err := http.Get(env.server.URL + "/api/violations")
+	if err != nil {
+		t.Fatalf("GET /api/violations: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var violations []any
+	json.NewDecoder(resp.Body).Decode(&violations)
+	if len(violations) != 1 {
+		t.Fatalf("expected 1 violation, got %d", len(violations))
+	}
+}
+
+func TestListPolicies(t *testing.T) {
+	env := setupTestEnv(t)
+
+	resp, err := http.Get(env.server.URL + "/api/policies")
+	if err != nil {
+		t.Fatalf("GET /api/policies: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var policies []map[string]any
+	json.NewDecoder(resp.Body).Decode(&policies)
+	if len(policies) != 1 {
+		t.Fatalf("expected 1 policy, got %d", len(policies))
+	}
+	if policies[0]["id"] != "test-policy" {
+		t.Fatalf("expected policy id 'test-policy', got %v", policies[0]["id"])
+	}
+}
+
+func TestFilterPaths(t *testing.T) {
+	env := setupTestEnv(t)
+
+	req := FilterPathsRequest{
+		PolicyID: "test-policy",
+		Paths: []model.SCIONPath{
+			{Hops: []model.ASHop{{IA: "1-ff00:0:110", ISD: 1}, {IA: "2-ff00:0:210", ISD: 2}}, Fingerprint: "ok"},
+			{Hops: []model.ASHop{{IA: "1-ff00:0:110", ISD: 1}, {IA: "3-ff00:0:310", ISD: 3}}, Fingerprint: "bad"},
+		},
+	}
+	body, _ := json.Marshal(req)
+	resp, err := http.Post(env.server.URL+"/api/filter-paths", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /api/filter-paths: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	compliant := result["compliant"].([]any)
+	nonCompliant := result["non_compliant"].([]any)
+	if len(compliant) != 1 {
+		t.Fatalf("expected 1 compliant, got %d", len(compliant))
+	}
+	if len(nonCompliant) != 1 {
+		t.Fatalf("expected 1 non-compliant, got %d", len(nonCompliant))
+	}
+}
+
+func TestFilterPaths_UnknownPolicy(t *testing.T) {
+	env := setupTestEnv(t)
+
+	req := FilterPathsRequest{PolicyID: "nope", Paths: []model.SCIONPath{}}
+	body, _ := json.Marshal(req)
+	resp, err := http.Post(env.server.URL+"/api/filter-paths", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /api/filter-paths: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestLedger(t *testing.T) {
+	env := setupTestEnv(t)
+
+	resp, err := http.Get(env.server.URL + "/api/ledger")
+	if err != nil {
+		t.Fatalf("GET /api/ledger: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var lr LedgerResponse
+	json.NewDecoder(resp.Body).Decode(&lr)
+	if len(lr.Validators) != 3 {
+		t.Fatalf("expected 3 validators, got %d", len(lr.Validators))
+	}
+}
+
+func TestTransactions_Empty(t *testing.T) {
+	env := setupTestEnv(t)
+
+	resp, err := http.Get(env.server.URL + "/api/transactions")
+	if err != nil {
+		t.Fatalf("GET /api/transactions: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var txs []any
+	json.NewDecoder(resp.Body).Decode(&txs)
+	if len(txs) != 0 {
+		t.Fatalf("expected 0 transactions, got %d", len(txs))
+	}
+}
+
+func TestTransactions_AfterSettle(t *testing.T) {
+	env := setupTestEnv(t)
+
+	postSettle(t, env.server.URL, SettleRequest{
+		From: "CH", To: "EU", Amount: 100, Currency: "CHF",
+		PolicyID: "test-policy", RawPath: compliantPath(t),
+	})
+
+	resp, err := http.Get(env.server.URL + "/api/transactions")
+	if err != nil {
+		t.Fatalf("GET /api/transactions: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var txs []any
+	json.NewDecoder(resp.Body).Decode(&txs)
+	if len(txs) != 1 {
+		t.Fatalf("expected 1 transaction, got %d", len(txs))
+	}
+}
+
+func TestSSE_ConnectsAndDisconnects(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// SSE streams indefinitely — use a short-lived context to verify the
+	// endpoint accepts connections without hanging the test suite.
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, "GET", env.server.URL+"/api/events", nil)
+
+	errCh := make(chan error, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if resp != nil {
+			resp.Body.Close()
+		}
+		errCh <- err
+	}()
+
+	// Give the handler time to start, then cancel
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	err := <-errCh
+	if err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
