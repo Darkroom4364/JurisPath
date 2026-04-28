@@ -69,7 +69,9 @@ func TestLoadValidators_Valid(t *testing.T) {
     CHF: 5000
 `
 	path := filepath.Join(t.TempDir(), "validators.yaml")
-	os.WriteFile(path, []byte(content), 0644)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
 
 	validators, err := LoadValidators(path)
 	if err != nil {
@@ -98,7 +100,9 @@ func TestLoadValidators_MissingFile(t *testing.T) {
 
 func TestLoadValidators_EmptyFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "validators.yaml")
-	os.WriteFile(path, []byte("[]"), 0644)
+	if err := os.WriteFile(path, []byte("[]"), 0644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
 
 	_, err := LoadValidators(path)
 	if err == nil {
@@ -113,7 +117,9 @@ func TestLoadValidators_MissingID(t *testing.T) {
     CHF: 10000
 `
 	path := filepath.Join(t.TempDir(), "validators.yaml")
-	os.WriteFile(path, []byte(content), 0644)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
 
 	_, err := LoadValidators(path)
 	if err == nil {
@@ -128,10 +134,34 @@ func TestLoadValidators_MissingAddress(t *testing.T) {
     CHF: 10000
 `
 	path := filepath.Join(t.TempDir(), "validators.yaml")
-	os.WriteFile(path, []byte(content), 0644)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
 
 	_, err := LoadValidators(path)
 	if err == nil {
 		t.Fatal("expected error for missing address")
+	}
+}
+
+func TestLoadValidators_DuplicateID(t *testing.T) {
+	content := `
+- id: CH
+  address: "1-ff00:0:111,[127.0.0.1]:30100"
+  balance:
+    CHF: 10000
+- id: CH
+  address: "1-ff00:0:112,[127.0.0.1]:30101"
+  balance:
+    CHF: 5000
+`
+	path := filepath.Join(t.TempDir(), "validators.yaml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	_, err := LoadValidators(path)
+	if err == nil {
+		t.Fatal("expected error for duplicate validator id")
 	}
 }

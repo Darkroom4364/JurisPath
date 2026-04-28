@@ -68,6 +68,7 @@ func LoadValidators(path string) ([]ValidatorConfig, error) {
 		return nil, fmt.Errorf("validators file %q contains no validators", path)
 	}
 
+	seen := make(map[string]bool, len(validators))
 	for i, v := range validators {
 		if v.ID == "" {
 			return nil, fmt.Errorf("validator %d in %q has no id", i, path)
@@ -75,6 +76,10 @@ func LoadValidators(path string) ([]ValidatorConfig, error) {
 		if v.Address == "" {
 			return nil, fmt.Errorf("validator %q in %q has no address", v.ID, path)
 		}
+		if seen[v.ID] {
+			return nil, fmt.Errorf("duplicate validator id %q in %q", v.ID, path)
+		}
+		seen[v.ID] = true
 	}
 
 	return validators, nil
