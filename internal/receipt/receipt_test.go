@@ -142,6 +142,71 @@ func TestGenerator_IssueAndVerify(t *testing.T) {
 	}
 }
 
+func TestGenerator_IssueWithRawPath(t *testing.T) {
+	gen, err := NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+
+	// Simulate a receipt with raw SCION dataplane bytes.
+	path := &model.SCIONPath{
+		Raw: []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
+		Hops: []model.ASHop{
+			{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110", HopMAC: []byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}},
+		},
+		Fingerprint: "raw-fp",
+	}
+
+	rcpt, err := gen.Issue("tx-raw", "policy-v1", path)
+	if err != nil {
+		t.Fatalf("issuing receipt: %v", err)
+	}
+
+	// Verify signature covers the raw path.
+	valid, err := Verify(rcpt)
+	if err != nil {
+		t.Fatalf("verifying receipt: %v", err)
+	}
+	if !valid {
+		t.Error("receipt with raw path should verify")
+	}
+
+	// Tampering with raw path bytes should break verification.
+	rcpt.Path.Raw[0] = 0xFF
+	valid, _ = Verify(rcpt)
+	if valid {
+		t.Error("receipt with tampered raw path should NOT verify")
+	}
+}
+
+func TestGenerator_MockModeBackwardCompat(t *testing.T) {
+	gen, err := NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+
+	// Receipt without raw path (mock mode) — should still sign and verify.
+	path := &model.SCIONPath{
+		Hops: []model.ASHop{
+			{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"},
+		},
+		Fingerprint: "mock-fp",
+	}
+
+	rcpt, err := gen.Issue("tx-mock", "policy-v1", path)
+	if err != nil {
+		t.Fatalf("issuing receipt: %v", err)
+	}
+
+	valid, err := Verify(rcpt)
+	if err != nil {
+		t.Fatalf("verifying receipt: %v", err)
+	}
+	if !valid {
+		t.Error("mock-mode receipt should verify")
+	}
+}
+
 func TestGenerator_SequenceNumbers(t *testing.T) {
 	gen, err := NewGenerator()
 	if err != nil {

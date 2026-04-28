@@ -61,7 +61,7 @@ func TestMockPathExtractor_ValidHops(t *testing.T) {
 		t.Fatalf("got %d hops, want %d", len(hops), len(testHops))
 	}
 	for i, h := range hops {
-		if h != testHops[i] {
+		if h.IA != testHops[i].IA || h.ISD != testHops[i].ISD || h.AS != testHops[i].AS {
 			t.Errorf("hop[%d]: got %+v, want %+v", i, h, testHops[i])
 		}
 	}
@@ -100,6 +100,42 @@ func TestNewMockPath_RoundTrip(t *testing.T) {
 	}
 	if len(hops) != len(testHops) {
 		t.Fatalf("round-trip: got %d hops, want %d", len(hops), len(testHops))
+	}
+}
+
+// --- FingerprintPath ---
+
+func TestFingerprintPath_UsesRawWhenPresent(t *testing.T) {
+	raw := []byte("authenticated-scion-dataplane-bytes")
+	fp := FingerprintPath(raw, testHops)
+	hopFP := FingerprintHops(testHops)
+	if fp == hopFP {
+		t.Fatal("FingerprintPath with raw bytes should differ from FingerprintHops")
+	}
+}
+
+func TestFingerprintPath_FallsBackToHops(t *testing.T) {
+	fp := FingerprintPath(nil, testHops)
+	hopFP := FingerprintHops(testHops)
+	if fp != hopFP {
+		t.Fatalf("FingerprintPath without raw should equal FingerprintHops: %s != %s", fp, hopFP)
+	}
+}
+
+func TestFingerprintPath_EmptyRawFallsBack(t *testing.T) {
+	fp := FingerprintPath([]byte{}, testHops)
+	hopFP := FingerprintHops(testHops)
+	if fp != hopFP {
+		t.Fatalf("FingerprintPath with empty raw should equal FingerprintHops: %s != %s", fp, hopFP)
+	}
+}
+
+func TestFingerprintPath_DeterministicWithRaw(t *testing.T) {
+	raw := []byte("same-bytes")
+	a := FingerprintPath(raw, testHops)
+	b := FingerprintPath(raw, testHops)
+	if a != b {
+		t.Fatalf("FingerprintPath is not deterministic: %s != %s", a, b)
 	}
 }
 
