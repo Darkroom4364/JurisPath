@@ -490,6 +490,114 @@ func TestRejectedTxCleanup(t *testing.T) {
 	}
 }
 
+func TestSplitVote_TwoToOne(t *testing.T) {
+	// 3 validators: A has 500 CHF, B and C have 5000 each.
+	// Submit two txs from A for 500 each. First confirms (A→0).
+	// Second: A has 0 so votes are 0 yes out of 3 — rejected.
+	validators := []ValidatorState{
+		{ID: "A", Address: "addr-a", Balance: map[string]int64{"CHF": 500}},
+		{ID: "B", Address: "addr-b", Balance: map[string]int64{"CHF": 5000}},
+		{ID: "C", Address: "addr-c", Balance: map[string]int64{"CHF": 5000}},
+	}
+	ledger := NewLedger(validators)
+	engine := NewConsensusEngine(ledger, validators)
+
+	// First tx: confirm, drains A to 0
+	tx1 := &Transaction{ID: uuid.New().String(), From: "A", To: "B", Amount: 500, Currency: "CHF"}
+	r1, err := engine.RunRound(tx1)
+	if err != nil || !r1.Confirmed {
+		t.Fatalf("tx1 should confirm: err=%v confirmed=%v", err, r1.Confirmed)
+	}
+
+	// Submit second tx while A has balance for submit check... but A has 0 now
+	tx2 := &Transaction{ID: uuid.New().String(), From: "A", To: "B", Amount: 500, Currency: "CHF"}
+	r2, err := engine.RunRound(tx2)
+	if err == nil {
+		t.Fatalf("tx2 should fail at submit (A has 0), but got result: %+v", r2)
+	}
+	if r2.Confirmed {
+		t.Fatal("tx2 should not be confirmed")
+	}
+}
+
+func TestEvenValidatorCount(t *testing.T) {
+	// 4 validators, tx sender has balance — all should vote yes, 4/4 > 3 majority
+	validators := []ValidatorState{
+		{ID: "A", Address: "a", Balance: map[string]int64{"CHF": 1000}},
+		{ID: "B", Address: "b", Balance: map[string]int64{"CHF": 1000}},
+		{ID: "C", Address: "c", Balance: map[string]int64{"CHF": 1000}},
+		{ID: "D", Address: "d", Balance: map[string]int64{"CHF": 1000}},
+	}
+	ledger := NewLedger(validators)
+	engine := NewConsensusEngine(ledger, validators)
+
+	tx := &Transaction{ID: uuid.New().String(), From: "A", To: "B", Amount: 100, Currency: "CHF"}
+	r, err := engine.RunRound(tx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !r.Confirmed {
+		t.Fatal("expected tx to be confirmed with 4/4 votes")
+	}
+	if r.Votes != 4 {
+		t.Fatalf("expected 4 votes, got %d", r.Votes)
+	}
+}
+
+func TestSubmitAndRunRound_NewTx(t *testing.T) {
+	validators := testValidators()
+	ledger := NewLedger(validators)
+	engine := NewConsensusEngine(ledger, validators)
+
+	tx := &Transaction{ID: uuid.New().String(), From: "CH", To: "EU", Amount: 100, Currency: "CHF"}
+	existing, result, err := engine.SubmitAndRunRound(tx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if existing != nil {
+		t.Fatal("expected nil existing for new tx")
+	}
+	if !result.Confirmed {
+		t.Fatal("expected tx confirmed")
+	}
+}
+
+func TestSubmitAndRunRound_DuplicateTx(t *testing.T) {
+	validators := testValidators()
+	ledger := NewLedger(validators)
+	engine := NewConsensusEngine(ledger, validators)
+
+	tx := &Transaction{ID: uuid.New().String(), From: "CH", To: "EU", Amount: 100, Currency: "CHF"}
+	_, _, err := engine.SubmitAndRunRound(tx)
+	if err != nil {
+		t.Fatalf("first round: %v", err)
+	}
+
+	// Submit same txID again
+	tx2 := &Transaction{ID: tx.ID, From: "CH", To: "EU", Amount: 100, Currency: "CHF"}
+	existing, result, err := engine.SubmitAndRunRound(tx2)
+	if err != nil {
+		t.Fatalf("duplicate submit error: %v", err)
+	}
+	if existing == nil {
+		t.Fatal("expected existing tx on duplicate")
+	}
+	if result != nil {
+		t.Fatal("expected nil result when tx already exists")
+	}
+}
+
+func TestNoValidators(t *testing.T) {
+	ledger := NewLedger(nil)
+	engine := NewConsensusEngine(ledger, nil)
+
+	tx := &Transaction{ID: uuid.New().String(), From: "CH", To: "EU", Amount: 100, Currency: "CHF"}
+	_, err := engine.RunRound(tx)
+	if err == nil {
+		t.Fatal("expected error with no validators")
+	}
+}
+
 func TestConcurrentTransactions(t *testing.T) {
 	validators := testValidators()
 	ledger := NewLedger(validators)
