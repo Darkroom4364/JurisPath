@@ -13,6 +13,9 @@ type Config struct {
 	DataDir       string
 	LogLevel      string // "debug", "info", "warn", "error"
 	OracleKeyPath string
+	SCIONMode     bool   // true = validators communicate over SCION
+	SCIONDaemon   string // SCION daemon address (e.g. "127.0.0.1:30255")
+	ValidatorID   string // this node's validator ID (required in SCION mode)
 }
 
 // Load reads configuration from environment variables with defaults.
@@ -24,6 +27,9 @@ func Load() *Config {
 		DataDir:       envOr("JURISPATH_DATA_DIR", "data/"),
 		LogLevel:      envOr("JURISPATH_LOG_LEVEL", "info"),
 		OracleKeyPath: envOr("JURISPATH_ORACLE_KEY", "data/oracle.key"),
+		SCIONMode:     os.Getenv("JURISPATH_SCION_MODE") == "true",
+		SCIONDaemon:   envOr("JURISPATH_SCION_DAEMON", "127.0.0.1:30255"),
+		ValidatorID:   os.Getenv("JURISPATH_VALIDATOR_ID"),
 	}
 }
 

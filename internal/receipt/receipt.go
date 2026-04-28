@@ -198,12 +198,16 @@ func Verify(receipt *model.ComplianceReceipt) (bool, error) {
 }
 
 func marshalForSigning(r *model.ComplianceReceipt) ([]byte, error) {
-	// Deterministic serialization of the fields that are signed
+	// Deterministic serialization of the fields that are signed.
+	// PathRaw contains the actual SCION dataplane bytes when available,
+	// binding the signature to the authenticated path data (hop field MACs)
+	// rather than just the oracle's text reconstruction.
 	signable := struct {
 		ID            string           `json:"id"`
 		TransactionID string           `json:"transaction_id"`
 		PolicyID      string           `json:"policy_id"`
 		PathFP        string           `json:"path_fingerprint"`
+		PathRaw       []byte           `json:"path_raw,omitempty"`
 		SeqNo         uint64           `json:"seq_no"`
 		Timestamp     time.Time        `json:"timestamp"`
 		ISDProofs     []model.ISDProof `json:"isd_proofs"`
@@ -213,6 +217,7 @@ func marshalForSigning(r *model.ComplianceReceipt) ([]byte, error) {
 		TransactionID: r.TransactionID,
 		PolicyID:      r.PolicyID,
 		PathFP:        r.Path.Fingerprint,
+		PathRaw:       r.Path.Raw,
 		SeqNo:         r.SeqNo,
 		Timestamp:     r.Timestamp,
 		ISDProofs:     r.ISDProofs,

@@ -7,20 +7,46 @@ import (
 )
 
 // ConsensusEngine orchestrates a simple 2-phase consensus protocol
-// (propose -> vote -> commit) across a set of validators. Currently runs
-// locally in a single process; the SCION networking layer will be plugged
-// in separately.
+// (propose -> vote -> commit) across a set of validators. It uses a
+// ValidatorTransport to deliver messages; in single-process mode this
+// is a LocalTransport (in-process channels), and in multi-node mode
+// a SCIONTransport over real SCION/UDP connections.
 type ConsensusEngine struct {
 	mu         sync.Mutex
 	ledger     *Ledger
 	validators []ValidatorState
+	transport  ValidatorTransport
 }
 
 // NewConsensusEngine creates a consensus engine backed by the given ledger.
+// It uses an internal LocalTransport so all existing call sites work unchanged.
 func NewConsensusEngine(ledger *Ledger, validators []ValidatorState) *ConsensusEngine {
+	// Build a local transport set; the engine uses the first validator's inbox
+	// but in single-process mode the transport is only used for the propose→vote→commit
+	// loop which runs synchronously in proposeVoteCommitLocked.
+	ids := make([]string, len(validators))
+	for i, v := range validators {
+		ids[i] = v.ID
+	}
+	var transport ValidatorTransport
+	if len(ids) > 0 {
+		transports := NewLocalTransportSet(ids)
+		transport = transports[ids[0]]
+	}
 	return &ConsensusEngine{
 		ledger:     ledger,
 		validators: validators,
+		transport:  transport,
+	}
+}
+
+// NewConsensusEngineWithTransport creates a consensus engine with an explicit
+// transport, used when validators communicate over real SCION networking.
+func NewConsensusEngineWithTransport(ledger *Ledger, validators []ValidatorState, transport ValidatorTransport) *ConsensusEngine {
+	return &ConsensusEngine{
+		ledger:     ledger,
+		validators: validators,
+		transport:  transport,
 	}
 }
 
@@ -72,6 +98,10 @@ func (ce *ConsensusEngine) RunRoundFromPending(tx *Transaction) (*ConsensusResul
 
 // proposeVoteCommitLocked runs the propose→vote→commit consensus phases.
 // Caller must hold ce.mu. The transaction must already be in the pending pool.
+//
+// This method runs all validators synchronously via direct ledger calls,
+// keeping the local-transport path identical to the original behavior.
+// The transport is used by ValidatorNode for multi-node consensus.
 func (ce *ConsensusEngine) proposeVoteCommitLocked(tx *Transaction) (*ConsensusResult, error) {
 	if len(ce.validators) == 0 {
 		ce.ledger.CleanupPending(tx.ID)

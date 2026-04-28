@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/scionproto/scion/pkg/daemon"
+	scionpath "github.com/scionproto/scion/pkg/slayers/path/scion"
 	"github.com/scionproto/scion/pkg/snet"
 
 	"github.com/jurispath/jurispath/pkg/model"
@@ -17,8 +18,8 @@ type PathExtractor interface {
 }
 
 // FingerprintHops computes a deterministic SHA-256 fingerprint from the hop
-// sequence. This is the canonical fingerprint used for path identity regardless
-// of whether the path came from mock data or real SCION metadata.
+// sequence. This is the fallback fingerprint used in mock mode where raw
+// SCION path bytes are not available.
 func FingerprintHops(hops []model.ASHop) string {
 	var buf []byte
 	for _, h := range hops {
@@ -27,6 +28,18 @@ func FingerprintHops(hops []model.ASHop) string {
 	}
 	hash := sha256.Sum256(buf)
 	return fmt.Sprintf("%x", hash)
+}
+
+// FingerprintPath computes a fingerprint from the actual SCION dataplane path
+// bytes when available, falling back to FingerprintHops for mock mode.
+// This ensures receipts bind to the authenticated path data, not a
+// text reconstruction.
+func FingerprintPath(raw []byte, hops []model.ASHop) string {
+	if len(raw) > 0 {
+		hash := sha256.Sum256(raw)
+		return fmt.Sprintf("%x", hash)
+	}
+	return FingerprintHops(hops)
 }
 
 // BuildSCIONPath constructs a SCIONPath from raw bytes using the given extractor.
@@ -98,15 +111,78 @@ func (e *SnetPathExtractor) ExtractHopsFromSnetPath(p snet.Path) ([]model.ASHop,
 	return hops, nil
 }
 
-// BuildSCIONPathFromSnet constructs a model.SCIONPath from a real snet.Path.
+// BuildSCIONPathFromSnet constructs a model.SCIONPath from a real snet.Path,
+// including the raw dataplane bytes and hop field MACs for receipt signing.
 func BuildSCIONPathFromSnet(extractor *SnetPathExtractor, p snet.Path) (*model.SCIONPath, error) {
 	hops, err := extractor.ExtractHopsFromSnetPath(p)
 	if err != nil {
 		return nil, fmt.Errorf("extracting hops from snet path: %w", err)
 	}
 
+	// Serialize the actual SCION dataplane path bytes so receipts can
+	// bind to the authenticated path, not a text reconstruction.
+	var rawPath []byte
+	if dp := p.Dataplane(); dp != nil {
+		rawPath, err = serializeDataplanePath(dp)
+		if err != nil {
+			slog.Warn("failed to serialize dataplane path", "error", err)
+			// Non-fatal: fall back to hop-string fingerprint.
+		}
+	}
+
+	// Extract hop field MACs from the decoded path.
+	extractHopMACs(rawPath, hops)
+
 	return &model.SCIONPath{
+		Raw:         rawPath,
 		Hops:        hops,
-		Fingerprint: FingerprintHops(hops),
+		Fingerprint: FingerprintPath(rawPath, hops),
 	}, nil
+}
+
+// serializeDataplanePath serializes a SCION DataplanePath to raw bytes.
+func serializeDataplanePath(dp snet.DataplanePath) ([]byte, error) {
+	// RawPath already carries serialized bytes.
+	if rp, ok := dp.(snet.RawPath); ok {
+		out := make([]byte, len(rp.Raw))
+		copy(out, rp.Raw)
+		return out, nil
+	}
+
+	// For other path types, attempt to serialize via the slayers interface.
+	type serializer interface {
+		Len() int
+		SerializeTo([]byte) error
+	}
+	if s, ok := dp.(serializer); ok {
+		buf := make([]byte, s.Len())
+		if err := s.SerializeTo(buf); err != nil {
+			return nil, fmt.Errorf("serializing path: %w", err)
+		}
+		return buf, nil
+	}
+
+	return nil, fmt.Errorf("unsupported dataplane path type %T", dp)
+}
+
+// extractHopMACs decodes raw SCION path bytes and attaches hop field MACs
+// to the corresponding ASHop entries (matched by position).
+func extractHopMACs(raw []byte, hops []model.ASHop) {
+	if len(raw) == 0 {
+		return
+	}
+	var decoded scionpath.Decoded
+	if err := decoded.DecodeFromBytes(raw); err != nil {
+		slog.Debug("failed to decode path for hop MACs", "error", err)
+		return
+	}
+	// Map hop fields to ASHop entries. In a SCION path each interface pair
+	// corresponds to one hop field; we distribute MACs across the unique
+	// AS hops in order.
+	for i := range hops {
+		if i < len(decoded.HopFields) {
+			mac := decoded.HopFields[i].Mac
+			hops[i].HopMAC = mac[:]
+		}
+	}
 }
