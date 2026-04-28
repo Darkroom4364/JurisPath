@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -82,8 +83,47 @@ func main() {
 			Balance: map[string]int64{"CHF": 1000, "EUR": 1000},
 		},
 	}
-	ledger := dlt.NewLedger(validators)
-	consensus := dlt.NewConsensusEngine(ledger, validators)
+
+	var consensus *dlt.ConsensusEngine
+	var ledger *dlt.Ledger
+	if cfg.SCIONMode {
+		// Multi-node mode: this process is one validator communicating
+		// over real SCION/UDP connections.
+		if cfg.ValidatorID == "" {
+			slog.Error("JURISPATH_VALIDATOR_ID required in SCION mode")
+			os.Exit(1)
+		}
+		ctx := context.Background()
+		network, _, err := scion.NewSCIONNetwork(ctx, cfg.SCIONDaemon)
+		if err != nil {
+			slog.Error("failed to initialize SCION network", "error", err)
+			os.Exit(1)
+		}
+		localAddr, err := dlt.ParseSCIONLocalAddr(cfg.ValidatorID, validators)
+		if err != nil {
+			slog.Error("failed to parse local SCION address", "error", err)
+			os.Exit(1)
+		}
+		conn, err := network.Listen(ctx, "udp", localAddr)
+		if err != nil {
+			slog.Error("failed to listen on SCION", "addr", localAddr, "error", err)
+			os.Exit(1)
+		}
+		peers, err := dlt.ParseSCIONPeers(cfg.ValidatorID, validators)
+		if err != nil {
+			slog.Error("failed to parse SCION peers", "error", err)
+			os.Exit(1)
+		}
+		transport := dlt.NewSCIONTransport(cfg.ValidatorID, conn, peers)
+		ledger = dlt.NewLedger(validators)
+		consensus = dlt.NewConsensusEngineWithTransport(ledger, validators, transport)
+		slog.Info("SCION consensus mode enabled", "validator", cfg.ValidatorID)
+	} else {
+		// Single-process mode: all validators run in one process with
+		// in-memory transport.
+		ledger = dlt.NewLedger(validators)
+		consensus = dlt.NewConsensusEngine(ledger, validators)
+	}
 	slog.Info("DLT ledger initialized", "validators", len(validators))
 
 	// Ensure data directory exists
