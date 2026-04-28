@@ -18,8 +18,9 @@ import (
 type SCIONTransport struct {
 	localID string
 	conn    *snet.Conn
-	peers   map[string]*snet.UDPAddr // validatorID -> SCION address
-	mu      sync.RWMutex
+	peers   map[string]*snet.UDPAddr // validatorID -> SCION address (owned copy)
+	mu      sync.RWMutex             // protects closed flag and peers
+	connMu  sync.Mutex               // serializes deadline + I/O on conn
 	closed  bool
 }
 
@@ -27,21 +28,27 @@ type SCIONTransport struct {
 // The conn should be created via snet.SCIONNetwork.Listen(). peers maps
 // validator IDs to their SCION addresses (parsed from ValidatorState.Address).
 func NewSCIONTransport(localID string, conn *snet.Conn, peers map[string]*snet.UDPAddr) *SCIONTransport {
+	ownedPeers := make(map[string]*snet.UDPAddr, len(peers))
+	for k, v := range peers {
+		ownedPeers[k] = v
+	}
 	return &SCIONTransport{
 		localID: localID,
 		conn:    conn,
-		peers:   peers,
+		peers:   ownedPeers,
 	}
 }
 
 func (t *SCIONTransport) Send(ctx context.Context, validatorID string, msg *ConsensusMessage) error {
+	// Check closed and copy peer address under mu, then release before I/O.
 	t.mu.RLock()
-	defer t.mu.RUnlock()
 	if t.closed {
+		t.mu.RUnlock()
 		return fmt.Errorf("transport closed")
 	}
-
 	peer, ok := t.peers[validatorID]
+	t.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("unknown validator %s", validatorID)
 	}
@@ -50,6 +57,10 @@ func (t *SCIONTransport) Send(ctx context.Context, validatorID string, msg *Cons
 	if err != nil {
 		return fmt.Errorf("marshaling consensus message: %w", err)
 	}
+
+	// Serialize deadline + write on the shared conn.
+	t.connMu.Lock()
+	defer t.connMu.Unlock()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := t.conn.SetWriteDeadline(deadline); err != nil {
@@ -86,15 +97,26 @@ func (t *SCIONTransport) Broadcast(ctx context.Context, msg *ConsensusMessage) e
 }
 
 func (t *SCIONTransport) Receive(ctx context.Context) (*ConsensusMessage, *PathInfo, error) {
+	t.mu.RLock()
+	if t.closed {
+		t.mu.RUnlock()
+		return nil, nil, fmt.Errorf("transport closed")
+	}
+	t.mu.RUnlock()
+
 	buf := make([]byte, 4096)
 
+	// Serialize deadline + read on the shared conn.
+	t.connMu.Lock()
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := t.conn.SetReadDeadline(deadline); err != nil {
+			t.connMu.Unlock()
 			return nil, nil, fmt.Errorf("setting read deadline: %w", err)
 		}
 	}
-
 	n, remoteAddr, err := t.conn.ReadFrom(buf)
+	t.connMu.Unlock()
+
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading from SCION conn: %w", err)
 	}
@@ -144,11 +166,15 @@ func extractPathInfo(addr *snet.UDPAddr) *PathInfo {
 
 func (t *SCIONTransport) Close() error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.closed {
+		t.mu.Unlock()
 		return nil
 	}
 	t.closed = true
+	t.mu.Unlock()
+
+	t.connMu.Lock()
+	defer t.connMu.Unlock()
 	return t.conn.Close()
 }
 
@@ -169,8 +195,9 @@ func ParseSCIONPeers(localID string, validators []ValidatorState) (map[string]*s
 	return peers, nil
 }
 
-// ParseSCIONLocalAddr extracts the local SCION address from the validator
-// matching localID. Returns nil if not found.
+// ParseSCIONLocalAddr extracts the local UDP address from the validator
+// matching localID. Returns a non-nil error if no matching validator is
+// found or if the address cannot be parsed.
 func ParseSCIONLocalAddr(localID string, validators []ValidatorState) (*net.UDPAddr, error) {
 	for _, v := range validators {
 		if v.ID == localID {
