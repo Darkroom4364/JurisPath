@@ -65,23 +65,19 @@ func main() {
 	extractor := &scion.MockPathExtractor{}
 	slog.Warn("using mock path extractor — not connected to SCION daemon")
 
-	// Initialize DLT ledger with three validators (one per ISD)
-	validators := []dlt.ValidatorState{
-		{
-			ID:      "CH",
-			Address: "1-ff00:0:111,[127.0.0.1]:30100",
-			Balance: map[string]int64{"CHF": 10000, "EUR": 5000},
-		},
-		{
-			ID:      "EU",
-			Address: "2-ff00:0:211,[127.0.0.1]:30200",
-			Balance: map[string]int64{"CHF": 5000, "EUR": 10000},
-		},
-		{
-			ID:      "X",
-			Address: "3-ff00:0:310,[127.0.0.1]:30300",
-			Balance: map[string]int64{"CHF": 1000, "EUR": 1000},
-		},
+	// Load validator topology from config file.
+	validatorConfigs, err := config.LoadValidators(cfg.ValidatorsFile)
+	if err != nil {
+		slog.Error("failed to load validators", "path", cfg.ValidatorsFile, "error", err)
+		os.Exit(1)
+	}
+	validators := make([]dlt.ValidatorState, len(validatorConfigs))
+	for i, vc := range validatorConfigs {
+		validators[i] = dlt.ValidatorState{
+			ID:      vc.ID,
+			Address: vc.Address,
+			Balance: vc.Balance,
+		}
 	}
 
 	var consensus *dlt.ConsensusEngine

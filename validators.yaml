@@ -1,0 +1,17 @@
+- id: CH
+  address: "1-ff00:0:111,[127.0.0.1]:30100"
+  balance:
+    CHF: 10000
+    EUR: 5000
+
+- id: EU
+  address: "2-ff00:0:211,[127.0.0.1]:30200"
+  balance:
+    CHF: 5000
+    EUR: 10000
+
+- id: X
+  address: "3-ff00:0:310,[127.0.0.1]:30300"
+  balance:
+    CHF: 1000
+    EUR: 1000
