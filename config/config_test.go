@@ -43,7 +43,7 @@ func TestLoad_EnvOverride(t *testing.T) {
 }
 
 func TestValidate_ValidDir(t *testing.T) {
-	c := &Config{PolicyDir: t.TempDir()}
+	c := &Config{PolicyDir: t.TempDir(), AllowInsecure: true}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -64,6 +64,38 @@ func TestValidate_TLSPartial(t *testing.T) {
 	c = &Config{PolicyDir: t.TempDir(), TLSKey: "key.pem"}
 	if err := c.Validate(); err == nil {
 		t.Fatal("expected error when TLSKey set without TLSCert")
+	}
+}
+
+func TestValidate_NoTLSNoInsecure(t *testing.T) {
+	c := &Config{PolicyDir: t.TempDir()}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("expected error when neither TLS nor AllowInsecure is set")
+	}
+}
+
+func TestValidate_TLSFilesExist(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certPath, []byte("cert"), 0644); err != nil {
+		t.Fatalf("writing cert fixture: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key"), 0644); err != nil {
+		t.Fatalf("writing key fixture: %v", err)
+	}
+	c := &Config{PolicyDir: dir, TLSCert: certPath, TLSKey: keyPath}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_TLSFilesMissing(t *testing.T) {
+	c := &Config{PolicyDir: t.TempDir(), TLSCert: "/nonexistent/cert.pem", TLSKey: "/nonexistent/key.pem"}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("expected error for missing TLS cert file")
 	}
 }
 

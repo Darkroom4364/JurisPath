@@ -172,7 +172,8 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		slog.Warn("starting JurisPath HTTP server (no TLS)", "addr", cfg.ListenAddr)
+		// AllowInsecure must be true to reach here (enforced by cfg.Validate).
+		slog.Warn("starting JurisPath HTTP server (no TLS — JURISPATH_INSECURE=true)", "addr", cfg.ListenAddr)
 		if err := srv.ListenAndServe(cfg.ListenAddr); err != nil {
 			slog.Error("server exited", "error", err)
 			os.Exit(1)
