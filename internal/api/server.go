@@ -45,6 +45,15 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+const contentSecurityPolicy = "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Server is the JurisPath HTTP API.
 type Server struct {
 	mux           *http.ServeMux
@@ -195,7 +204,7 @@ func (s *Server) Close() {
 
 // Handler returns the API handler with recovery middleware applied.
 func (s *Server) Handler() http.Handler {
-	return recoveryMiddleware(s.mux)
+	return securityHeadersMiddleware(recoveryMiddleware(s.mux))
 }
 
 const (
