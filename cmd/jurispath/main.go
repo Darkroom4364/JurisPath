@@ -165,9 +165,18 @@ func main() {
 	// Start API server
 	srv := api.NewServer(policies, gen, extractor, ledger, consensus, receiptStore, detector, auditLog, cfg.DashboardDir)
 	defer srv.Close()
-	slog.Info("starting JurisPath API server", "addr", cfg.ListenAddr)
-	if err := srv.ListenAndServe(cfg.ListenAddr); err != nil {
-		slog.Error("server exited", "error", err)
-		os.Exit(1)
+	if cfg.TLSEnabled() {
+		slog.Info("starting JurisPath HTTPS server", "addr", cfg.ListenAddr, "cert", cfg.TLSCert)
+		if err := srv.ListenAndServeTLS(cfg.ListenAddr, cfg.TLSCert, cfg.TLSKey); err != nil {
+			slog.Error("server exited", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		// AllowInsecure must be true to reach here (enforced by cfg.Validate).
+		slog.Warn("starting JurisPath HTTP server (no TLS — JURISPATH_INSECURE=true)", "addr", cfg.ListenAddr)
+		if err := srv.ListenAndServe(cfg.ListenAddr); err != nil {
+			slog.Error("server exited", "error", err)
+			os.Exit(1)
+		}
 	}
 }

@@ -182,6 +182,12 @@ func (s *Server) ListenAndServe(addr string) error {
 	return http.ListenAndServe(addr, recoveryMiddleware(s.mux))
 }
 
+// ListenAndServeTLS starts the HTTPS server with the given certificate
+// and private key files.
+func (s *Server) ListenAndServeTLS(addr, certFile, keyFile string) error {
+	return http.ListenAndServeTLS(addr, certFile, keyFile, recoveryMiddleware(s.mux))
+}
+
 // CheckRequest is the payload for POST /api/check.
 type CheckRequest struct {
 	TransactionID string `json:"transaction_id"`

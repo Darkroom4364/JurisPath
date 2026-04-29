@@ -15,6 +15,9 @@ type Config struct {
 	DataDir       string
 	LogLevel      string // "debug", "info", "warn", "error"
 	OracleKeyPath string
+	TLSCert        string // path to TLS certificate file (enables HTTPS)
+	TLSKey         string // path to TLS private key file
+	AllowInsecure  bool   // explicitly allow plaintext HTTP (JURISPATH_INSECURE=true)
 	ValidatorsFile string // path to validators.yaml
 	SCIONMode      bool   // true = validators communicate over SCION
 	SCIONDaemon    string // SCION daemon address (e.g. "127.0.0.1:30255")
@@ -30,6 +33,9 @@ func Load() *Config {
 		DataDir:       envOr("JURISPATH_DATA_DIR", "data/"),
 		LogLevel:      envOr("JURISPATH_LOG_LEVEL", "info"),
 		OracleKeyPath:  envOr("JURISPATH_ORACLE_KEY", "data/oracle.key"),
+		TLSCert:        os.Getenv("JURISPATH_TLS_CERT"),
+		TLSKey:         os.Getenv("JURISPATH_TLS_KEY"),
+		AllowInsecure:  os.Getenv("JURISPATH_INSECURE") == "true",
 		ValidatorsFile: envOr("JURISPATH_VALIDATORS", "validators.yaml"),
 		SCIONMode:      os.Getenv("JURISPATH_SCION_MODE") == "true",
 		SCIONDaemon:   envOr("JURISPATH_SCION_DAEMON", "127.0.0.1:30255"),
@@ -37,10 +43,29 @@ func Load() *Config {
 	}
 }
 
+// TLSEnabled returns true when both TLS cert and key paths are configured.
+func (c *Config) TLSEnabled() bool {
+	return c.TLSCert != "" && c.TLSKey != ""
+}
+
 // Validate checks that required paths exist.
 func (c *Config) Validate() error {
 	if _, err := os.Stat(c.PolicyDir); err != nil {
 		return fmt.Errorf("policy directory %q: %w", c.PolicyDir, err)
+	}
+	if (c.TLSCert != "") != (c.TLSKey != "") {
+		return fmt.Errorf("both JURISPATH_TLS_CERT and JURISPATH_TLS_KEY must be set, or neither")
+	}
+	if c.TLSEnabled() {
+		if _, err := os.Stat(c.TLSCert); err != nil {
+			return fmt.Errorf("TLS certificate %q: %w", c.TLSCert, err)
+		}
+		if _, err := os.Stat(c.TLSKey); err != nil {
+			return fmt.Errorf("TLS key %q: %w", c.TLSKey, err)
+		}
+	}
+	if !c.TLSEnabled() && !c.AllowInsecure {
+		return fmt.Errorf("TLS not configured; set JURISPATH_TLS_CERT and JURISPATH_TLS_KEY, or set JURISPATH_INSECURE=true to allow plaintext HTTP")
 	}
 	return nil
 }
