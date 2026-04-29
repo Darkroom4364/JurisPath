@@ -2,10 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/jurispath/jurispath/config"
 	"github.com/jurispath/jurispath/internal/api"
@@ -17,7 +22,13 @@ import (
 	"github.com/jurispath/jurispath/internal/violation"
 )
 
+const shutdownTimeout = 10 * time.Second
+
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	cfg := config.Load()
 
 	// Initialize structured logger
@@ -37,7 +48,7 @@ func main() {
 
 	if err := cfg.Validate(); err != nil {
 		slog.Error("config validation failed", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	slog.Debug("configuration loaded", "listen", cfg.ListenAddr, "policy_dir", cfg.PolicyDir, "data_dir", cfg.DataDir, "log_level", cfg.LogLevel)
 
@@ -45,7 +56,7 @@ func main() {
 	policies, err := policy.LoadAllFromDir(cfg.PolicyDir)
 	if err != nil {
 		slog.Error("failed to load policies", "dir", cfg.PolicyDir, "error", err)
-		os.Exit(1)
+		return 1
 	}
 	slog.Info("policies loaded", "count", len(policies))
 	for _, p := range policies {
@@ -56,7 +67,7 @@ func main() {
 	gen, err := receipt.NewGeneratorFromFile(cfg.OracleKeyPath)
 	if err != nil {
 		slog.Error("failed to create receipt generator", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	slog.Info("receipt generator initialized", "public_key", gen.PublicKey())
 
@@ -69,7 +80,7 @@ func main() {
 	validatorConfigs, err := config.LoadValidators(cfg.ValidatorsFile)
 	if err != nil {
 		slog.Error("failed to load validators", "path", cfg.ValidatorsFile, "error", err)
-		os.Exit(1)
+		return 1
 	}
 	validators := make([]dlt.ValidatorState, len(validatorConfigs))
 	for i, vc := range validatorConfigs {
@@ -87,29 +98,29 @@ func main() {
 		// over real SCION/UDP connections.
 		if cfg.ValidatorID == "" {
 			slog.Error("JURISPATH_VALIDATOR_ID required in SCION mode")
-			os.Exit(1)
+			return 1
 		}
 		ctx := context.Background()
 		network, _, err := scion.NewSCIONNetwork(ctx, cfg.SCIONDaemon)
 		if err != nil {
 			slog.Error("failed to initialize SCION network", "error", err)
-			os.Exit(1)
+			return 1
 		}
 		localAddr, err := dlt.ParseSCIONLocalAddr(cfg.ValidatorID, validators)
 		if err != nil {
 			slog.Error("failed to parse local SCION address", "error", err)
-			os.Exit(1)
+			return 1
 		}
 		conn, err := network.Listen(ctx, "udp", localAddr)
 		if err != nil {
 			slog.Error("failed to listen on SCION", "addr", localAddr, "error", err)
-			os.Exit(1)
+			return 1
 		}
 		peers, err := dlt.ParseSCIONPeers(cfg.ValidatorID, validators)
 		if err != nil {
 			conn.Close() //nolint:errcheck // cleanup on setup failure
 			slog.Error("failed to parse SCION peers", "error", err)
-			os.Exit(1)
+			return 1
 		}
 		transport := dlt.NewSCIONTransport(cfg.ValidatorID, conn, peers)
 		// conn is now owned by transport; transport.Close() will close it.
@@ -127,27 +138,27 @@ func main() {
 	// Ensure data directory exists
 	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
 		slog.Error("failed to create data directory", "path", cfg.DataDir, "error", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Initialize persistent stores
 	receiptStore, err := receipt.NewBoltStore(filepath.Join(cfg.DataDir, "receipts.db"))
 	if err != nil {
 		slog.Error("failed to open receipt store", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer receiptStore.Close() //nolint:errcheck // shutdown cleanup
 	slog.Debug("receipt store opened", "path", filepath.Join(cfg.DataDir, "receipts.db"))
 
 	if err := gen.SeedChain(receiptStore); err != nil {
 		slog.Error("failed to seed receipt chain", "error", err)
-		os.Exit(1)
+		return 1
 	}
 
 	violationStore, err := violation.NewBoltViolationStore(filepath.Join(cfg.DataDir, "violations.db"))
 	if err != nil {
 		slog.Error("failed to open violation store", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer violationStore.Close() //nolint:errcheck // shutdown cleanup
 	slog.Debug("violation store opened", "path", filepath.Join(cfg.DataDir, "violations.db"))
@@ -157,7 +168,7 @@ func main() {
 	auditLog, err := audit.NewAuditLog(filepath.Join(cfg.DataDir, "audit.db"))
 	if err != nil {
 		slog.Error("failed to open audit log", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer auditLog.Close() //nolint:errcheck // shutdown cleanup
 	slog.Debug("audit log opened", "path", filepath.Join(cfg.DataDir, "audit.db"))
@@ -165,18 +176,53 @@ func main() {
 	// Start API server
 	srv := api.NewServer(policies, gen, extractor, ledger, consensus, receiptStore, detector, auditLog, cfg.DashboardDir)
 	defer srv.Close()
+	httpServer := &http.Server{
+		Addr:    cfg.ListenAddr,
+		Handler: srv.Handler(),
+	}
+
+	serverErr := make(chan error, 1)
 	if cfg.TLSEnabled() {
 		slog.Info("starting JurisPath HTTPS server", "addr", cfg.ListenAddr, "cert", cfg.TLSCert)
-		if err := srv.ListenAndServeTLS(cfg.ListenAddr, cfg.TLSCert, cfg.TLSKey); err != nil {
-			slog.Error("server exited", "error", err)
-			os.Exit(1)
-		}
+		go func() {
+			serverErr <- httpServer.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey)
+		}()
 	} else {
 		// AllowInsecure must be true to reach here (enforced by cfg.Validate).
 		slog.Warn("starting JurisPath HTTP server (no TLS — JURISPATH_INSECURE=true)", "addr", cfg.ListenAddr)
-		if err := srv.ListenAndServe(cfg.ListenAddr); err != nil {
-			slog.Error("server exited", "error", err)
-			os.Exit(1)
-		}
+		go func() {
+			serverErr <- httpServer.ListenAndServe()
+		}()
 	}
+
+	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	select {
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("server exited", "error", err)
+			return 1
+		}
+	case <-shutdownCtx.Done():
+		stop()
+		slog.Info("shutdown signal received", "addr", cfg.ListenAddr)
+
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := httpServer.Shutdown(ctx); err != nil {
+			slog.Error("graceful server shutdown failed", "error", err)
+			if closeErr := httpServer.Close(); closeErr != nil {
+				slog.Error("forced server close failed", "error", closeErr)
+			}
+			return 1
+		}
+
+		if err := <-serverErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("server exited during shutdown", "error", err)
+			return 1
+		}
+		slog.Info("server shut down gracefully", "addr", cfg.ListenAddr)
+	}
+	return 0
 }
