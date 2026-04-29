@@ -230,6 +230,20 @@ func TestNewHTTPServer_HardeningDefaults(t *testing.T) {
 	}
 }
 
+func TestHandlerSetsContentSecurityPolicy(t *testing.T) {
+	env := setupTestEnv(t)
+
+	resp, err := http.Get(env.server.URL + "/api/health")
+	if err != nil {
+		t.Fatalf("GET /api/health: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("Content-Security-Policy"); got != contentSecurityPolicy {
+		t.Fatalf("Content-Security-Policy = %q, want %q", got, contentSecurityPolicy)
+	}
+}
+
 func TestServerCloseDrainsAuditLog(t *testing.T) {
 	env := setupTestEnv(t)
 

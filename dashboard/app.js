@@ -150,6 +150,9 @@ function tableStatusCell(statusClass, statusText) {
 }
 
 function prefilterCard(path, compliant) {
+    const pathObject = path && typeof path === 'object' ? path : {};
+    const hopsList = Array.isArray(pathObject.hops) ? pathObject.hops : [];
+
     const card = document.createElement('div');
     card.className = `prefilter-card ${compliant ? 'compliant' : 'non-compliant'}`;
 
@@ -160,12 +163,14 @@ function prefilterCard(path, compliant) {
     const fingerprint = document.createElement('div');
     fingerprint.className = 'prefilter-fingerprint';
     const code = document.createElement('code');
-    code.textContent = path.fingerprint || 'path';
+    code.textContent = pathObject.fingerprint == null ? 'path' : String(pathObject.fingerprint);
     fingerprint.appendChild(code);
 
     const hops = document.createElement('div');
     hops.className = 'prefilter-hops';
-    hops.textContent = (path.hops || []).map(h => h.ia || '').join(' -> ');
+    hops.textContent = hopsList
+        .map(h => (h && typeof h === 'object' && h.ia != null) ? String(h.ia) : '')
+        .join(' -> ');
 
     card.append(status, fingerprint, hops);
     return card;
