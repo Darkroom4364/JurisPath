@@ -59,14 +59,24 @@ Three policies are included:
 - Go 1.22+
 - Docker and Docker Compose (optional)
 
+### TLS Startup Mode
+
+JurisPath starts fail-closed by default:
+- Set `JURISPATH_TLS_CERT` and `JURISPATH_TLS_KEY` to serve HTTPS.
+- Set `JURISPATH_INSECURE=true` only for explicit local HTTP demo/dev mode.
+
+See [docs/fail-closed-tls-startup.md](docs/fail-closed-tls-startup.md) for the full local and Docker workflows.
+
 ### Build and Run
 
 ```bash
 make build
-./bin/jurispath
+JURISPATH_INSECURE=true ./bin/jurispath
 ```
 
-The server starts on `:8080` by default. Open `http://localhost:8080` for the dashboard.
+The server starts on `:8080` by default.
+- Local HTTP demo/dev mode: `make run`, then open `http://localhost:8080`
+- Local HTTPS mode: `make tls-cert`, then `JURISPATH_TLS_CERT=deploy/certs/cert.pem JURISPATH_TLS_KEY=deploy/certs/key.pem make run-tls`
 
 ### Run Demo Scenarios
 
@@ -79,11 +89,23 @@ Runs three scenarios:
 - **Scenario B** — Violation: settlement path transits unauthorized ISD-X
 - **Scenario C** — Path pre-filtering: only compliant paths returned
 
+For TLS demos against the local self-signed cert, start the HTTPS server and run:
+
+```bash
+make demo-tls
+```
+
 ### Docker
 
 ```bash
 make up      # start
 make down    # stop
+```
+
+For Docker TLS mode with local development certs:
+
+```bash
+make up-tls-local
 ```
 
 ### Tests
@@ -136,6 +158,11 @@ policies/          Jurisdiction policy YAML files
 | `JURISPATH_LISTEN` | `:8080` | Server listen address |
 | `JURISPATH_POLICY_DIR` | `policies` | Path to jurisdiction policy YAML files |
 | `JURISPATH_DASHBOARD_DIR` | `dashboard` | Path to dashboard static files |
+| `JURISPATH_TLS_CERT` | *(empty)* | TLS certificate path. Must be set with `JURISPATH_TLS_KEY`. |
+| `JURISPATH_TLS_KEY` | *(empty)* | TLS private key path. Must be set with `JURISPATH_TLS_CERT`. |
+| `JURISPATH_INSECURE` | `false` | Explicitly allow plaintext HTTP startup for local demo/dev mode. |
+| `JURISPATH_DEMO_BASE_URL` | `http://localhost:8080` | Base URL used by `cmd/demo`. |
+| `JURISPATH_DEMO_INSECURE_TLS` | `false` | Allow `cmd/demo` to connect to local self-signed TLS certs. |
 
 ## References
 

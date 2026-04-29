@@ -105,9 +105,15 @@ services:
     hostname: jurispath
     ports:
       - "8080:8080"
+    volumes:
+      # Optional TLS cert mount for secure mode.
+      - ${JURISPATH_CERTS_DIR:-./certs}:/certs:ro
     environment:
       JURISPATH_LISTEN: ":8080"
       JURISPATH_POLICY_DIR: /etc/jurispath/policies
+      JURISPATH_INSECURE: "${JURISPATH_INSECURE:-true}"
+      JURISPATH_TLS_CERT: "${JURISPATH_TLS_CERT:-}"
+      JURISPATH_TLS_KEY: "${JURISPATH_TLS_KEY:-}"
       # SCION daemon addresses for path queries
       SCION_DAEMON_CH: "10.100.0.12:30255"
       SCION_DAEMON_EU: "10.100.0.22:30255"
