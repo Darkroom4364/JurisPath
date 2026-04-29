@@ -23,7 +23,9 @@ import (
 // testEnv bundles everything needed for an integration test.
 type testEnv struct {
 	server *httptest.Server
+	api    *Server
 	ledger *dlt.Ledger
+	audit  *audit.AuditLog
 }
 
 func setupTestEnv(t *testing.T) *testEnv {
@@ -62,13 +64,16 @@ func setupTestEnv(t *testing.T) *testEnv {
 	}
 
 	srv := NewServer([]*policy.Policy{pol}, gen, ext, ledger, consensus, rs, det, al, t.TempDir())
-	ts := httptest.NewServer(srv.mux)
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
 		srv.Close()
+		if err := al.Close(); err != nil {
+			t.Fatalf("closing audit log: %v", err)
+		}
 	})
 
-	return &testEnv{server: ts, ledger: ledger}
+	return &testEnv{server: ts, api: srv, ledger: ledger, audit: al}
 }
 
 func compliantPath(t *testing.T) []byte {
@@ -143,6 +148,25 @@ func TestSettleCompliantPath(t *testing.T) {
 	}
 	if compliance["receipt"] == nil {
 		t.Fatal("expected a receipt in compliance response")
+	}
+}
+
+func TestServerCloseDrainsAuditLog(t *testing.T) {
+	env := setupTestEnv(t)
+
+	for i := 0; i < 5; i++ {
+		env.api.audit("test", map[string]any{"index": i})
+	}
+
+	env.api.Close()
+	env.api.Close()
+
+	count, err := env.audit.Count()
+	if err != nil {
+		t.Fatalf("counting audit entries: %v", err)
+	}
+	if count != 5 {
+		t.Fatalf("expected 5 drained audit entries, got %d", count)
 	}
 }
 

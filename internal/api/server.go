@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -59,7 +60,8 @@ type Server struct {
 	auditLog      *audit.AuditLog
 	auditCh       chan audit.AuditEntry
 	auditFailures atomic.Uint64
-	auditDone     chan struct{}
+	auditWG       sync.WaitGroup
+	closeOnce     sync.Once
 	startTime     time.Time
 	dashboardDir  string
 }
@@ -77,19 +79,18 @@ func NewServer(
 	dashboardDir string,
 ) *Server {
 	s := &Server{
-		mux:       http.NewServeMux(),
-		policies:  policies,
-		checkers:  make(map[string]*pathcheck.Checker),
-		filters:   make(map[string]*pathcheck.PathFilter),
-		receipts:  rs,
-		generator: gen,
-		detector:  det,
-		extractor: ext,
-		ledger:    ledger,
-		consensus: consensus,
-		auditLog:  al,
+		mux:          http.NewServeMux(),
+		policies:     policies,
+		checkers:     make(map[string]*pathcheck.Checker),
+		filters:      make(map[string]*pathcheck.PathFilter),
+		receipts:     rs,
+		generator:    gen,
+		detector:     det,
+		extractor:    ext,
+		ledger:       ledger,
+		consensus:    consensus,
+		auditLog:     al,
 		auditCh:      make(chan audit.AuditEntry, 4096),
-		auditDone:    make(chan struct{}),
 		startTime:    time.Now(),
 		dashboardDir: dashboardDir,
 	}
@@ -100,6 +101,7 @@ func NewServer(
 	}
 
 	// Start background audit writer
+	s.auditWG.Add(1)
 	go s.auditWriter()
 
 	s.routes()
@@ -131,7 +133,7 @@ func (s *Server) routes() {
 }
 
 func (s *Server) auditWriter() {
-	defer close(s.auditDone)
+	defer s.auditWG.Done()
 	for entry := range s.auditCh {
 		if err := s.auditLog.Append(entry); err != nil {
 			s.auditFailures.Add(1)
@@ -173,19 +175,26 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 // Close drains the audit channel and waits for the writer goroutine to exit.
 func (s *Server) Close() {
-	close(s.auditCh)
-	<-s.auditDone
+	s.closeOnce.Do(func() {
+		close(s.auditCh)
+		s.auditWG.Wait()
+	})
+}
+
+// Handler returns the API handler with recovery middleware applied.
+func (s *Server) Handler() http.Handler {
+	return recoveryMiddleware(s.mux)
 }
 
 // ListenAndServe starts the HTTP server.
 func (s *Server) ListenAndServe(addr string) error {
-	return http.ListenAndServe(addr, recoveryMiddleware(s.mux))
+	return http.ListenAndServe(addr, s.Handler())
 }
 
 // ListenAndServeTLS starts the HTTPS server with the given certificate
 // and private key files.
 func (s *Server) ListenAndServeTLS(addr, certFile, keyFile string) error {
-	return http.ListenAndServeTLS(addr, certFile, keyFile, recoveryMiddleware(s.mux))
+	return http.ListenAndServeTLS(addr, certFile, keyFile, s.Handler())
 }
 
 // CheckRequest is the payload for POST /api/check.
