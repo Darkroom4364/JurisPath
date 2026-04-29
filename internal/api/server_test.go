@@ -151,6 +151,49 @@ func TestSettleCompliantPath(t *testing.T) {
 	}
 }
 
+func TestNewHTTPServer_HardeningDefaults(t *testing.T) {
+	t.Parallel()
+
+	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	tests := []struct {
+		name string
+		addr string
+	}{
+		{name: "standard address", addr: "127.0.0.1:8080"},
+		{name: "empty address", addr: ""},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := NewHTTPServer(tc.addr, handler)
+			if srv.Addr != tc.addr {
+				t.Fatalf("expected addr %q, got %q", tc.addr, srv.Addr)
+			}
+			if srv.Handler == nil {
+				t.Fatal("expected configured handler to be non-nil")
+			}
+			if srv.ReadHeaderTimeout != defaultReadHeaderTimeout {
+				t.Fatalf("expected ReadHeaderTimeout=%s, got %s", defaultReadHeaderTimeout, srv.ReadHeaderTimeout)
+			}
+			if srv.ReadTimeout != defaultReadTimeout {
+				t.Fatalf("expected ReadTimeout=%s, got %s", defaultReadTimeout, srv.ReadTimeout)
+			}
+			if srv.WriteTimeout != defaultWriteTimeout {
+				t.Fatalf("expected WriteTimeout=%s, got %s", defaultWriteTimeout, srv.WriteTimeout)
+			}
+			if srv.IdleTimeout != defaultIdleTimeout {
+				t.Fatalf("expected IdleTimeout=%s, got %s", defaultIdleTimeout, srv.IdleTimeout)
+			}
+			if srv.MaxHeaderBytes != defaultMaxHeaderBytes {
+				t.Fatalf("expected MaxHeaderBytes=%d, got %d", defaultMaxHeaderBytes, srv.MaxHeaderBytes)
+			}
+		})
+	}
+}
+
 func TestServerCloseDrainsAuditLog(t *testing.T) {
 	env := setupTestEnv(t)
 

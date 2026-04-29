@@ -176,10 +176,7 @@ func run() int {
 	// Start API server
 	srv := api.NewServer(policies, gen, extractor, ledger, consensus, receiptStore, detector, auditLog, cfg.DashboardDir)
 	defer srv.Close()
-	httpServer := &http.Server{
-		Addr:    cfg.ListenAddr,
-		Handler: srv.Handler(),
-	}
+	httpServer := api.NewHTTPServer(cfg.ListenAddr, srv.Handler())
 
 	serverErr := make(chan error, 1)
 	if cfg.TLSEnabled() {

@@ -186,15 +186,38 @@ func (s *Server) Handler() http.Handler {
 	return recoveryMiddleware(s.mux)
 }
 
+const (
+	// Conservative listener hardening to reduce slowloris/resource-exhaustion risk.
+	defaultReadHeaderTimeout = 5 * time.Second
+	defaultReadTimeout       = 30 * time.Second
+	defaultWriteTimeout      = 30 * time.Second
+	defaultIdleTimeout       = 120 * time.Second
+	defaultMaxHeaderBytes    = 1 << 20 // 1 MB
+)
+
+// NewHTTPServer returns the standard hardened HTTP server configuration for
+// JurisPath API listeners.
+func NewHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: defaultReadHeaderTimeout,
+		ReadTimeout:       defaultReadTimeout,
+		WriteTimeout:      defaultWriteTimeout,
+		IdleTimeout:       defaultIdleTimeout,
+		MaxHeaderBytes:    defaultMaxHeaderBytes,
+	}
+}
+
 // ListenAndServe starts the HTTP server.
 func (s *Server) ListenAndServe(addr string) error {
-	return http.ListenAndServe(addr, s.Handler())
+	return NewHTTPServer(addr, s.Handler()).ListenAndServe()
 }
 
 // ListenAndServeTLS starts the HTTPS server with the given certificate
 // and private key files.
 func (s *Server) ListenAndServeTLS(addr, certFile, keyFile string) error {
-	return http.ListenAndServeTLS(addr, certFile, keyFile, s.Handler())
+	return NewHTTPServer(addr, s.Handler()).ListenAndServeTLS(certFile, keyFile)
 }
 
 // CheckRequest is the payload for POST /api/check.
