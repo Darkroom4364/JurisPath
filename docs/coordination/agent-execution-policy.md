@@ -30,6 +30,9 @@ command bottleneck.
 - If an agent discovers a needed cross-scope change, it should stop and comment
   rather than expanding the issue silently.
 
+Initial rollout exception: this policy takes effect after the introducing PR
+merges, so subsequent PRs must enforce the separation rules above.
+
 ## Review Gates
 
 Changes require review before merge when they touch:

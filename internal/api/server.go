@@ -363,8 +363,10 @@ type SettleRequest struct {
 
 // SettleResponse is returned by POST /api/settle.
 type SettleResponse struct {
-	Consensus  *dlt.ConsensusResult `json:"consensus"`
-	Compliance *model.PolicyResult  `json:"compliance,omitempty"`
+	Consensus          *dlt.ConsensusResult `json:"consensus"`
+	Compliance         *model.PolicyResult  `json:"compliance,omitempty"`
+	ReceiptPersisted   *bool                `json:"receipt_persisted,omitempty"`
+	PersistenceWarning string               `json:"persistence_warning,omitempty"`
 }
 
 func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
@@ -514,6 +516,11 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	if err := s.receipts.Append(rcpt); err != nil {
 		slog.Error("failed to persist receipt during settlement", "tx_id", txID, "error", err)
 		s.auditReceiptPersistenceFailure("settle", txID, req.PolicyID, rcpt.ID, err)
+		// Consensus and ledger state are authoritative for settlement success;
+		// return the issued receipt while surfacing the local persistence gap.
+		persisted := false
+		resp.ReceiptPersisted = &persisted
+		resp.PersistenceWarning = fmt.Sprintf("receipt %s was issued but not persisted locally", rcpt.ID)
 	}
 
 	slog.Info("settlement completed", "tx_id", txID, "round", result.Round, "receipt_id", rcpt.ID)
@@ -671,6 +678,10 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		slog.Warn("failed to disable SSE write deadline", "remote", r.RemoteAddr, "error", err)
+	}
 
 	ch := s.detector.Subscribe()
 	defer s.detector.Unsubscribe(ch)

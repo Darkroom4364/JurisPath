@@ -201,7 +201,6 @@ func TestNewHTTPServer_HardeningDefaults(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -535,6 +534,12 @@ func TestReceiptPersistenceFailureAudits(t *testing.T) {
 				compliance, ok := result["compliance"].(map[string]any)
 				if !ok || compliance["receipt"] == nil {
 					t.Fatalf("expected compliance receipt in response, got %v", result["compliance"])
+				}
+				if result["receipt_persisted"] != false {
+					t.Fatalf("expected receipt_persisted=false, got %v", result["receipt_persisted"])
+				}
+				if result["persistence_warning"] == "" {
+					t.Fatalf("expected non-empty persistence_warning, got %v", result["persistence_warning"])
 				}
 			},
 			wantContext: "settle",
