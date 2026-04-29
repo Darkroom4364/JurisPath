@@ -161,6 +161,18 @@ func (s *Server) audit(eventType string, details any) {
 	}
 }
 
+func (s *Server) auditReceiptPersistenceFailure(context string, txID, policyID, receiptID string, err error) {
+	s.audit("receipt_persist_failure", map[string]any{
+		"context":    context,
+		"tx_id":      txID,
+		"policy_id":  policyID,
+		"receipt_id": receiptID,
+		"outcome":    "error",
+		"code":       "RECEIPT_PERSISTENCE_FAILED",
+		"error":      err.Error(),
+	})
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	failures := s.auditFailures.Load()
 	count, _ := s.receipts.Count()
@@ -277,6 +289,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.receipts.Append(rcpt); err != nil {
 			slog.Error("failed to persist receipt", "tx_id", req.TransactionID, "receipt_id", rcpt.ID, "error", err)
+			s.auditReceiptPersistenceFailure("check", req.TransactionID, req.PolicyID, rcpt.ID, err)
 			s.audit("check", map[string]any{"tx_id": req.TransactionID, "policy_id": req.PolicyID, "outcome": "error", "code": "INTERNAL_ERROR", "error": err.Error()})
 			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fmt.Sprintf("persisting receipt failed: %v", err))
 			return
@@ -500,6 +513,7 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.receipts.Append(rcpt); err != nil {
 		slog.Error("failed to persist receipt during settlement", "tx_id", txID, "error", err)
+		s.auditReceiptPersistenceFailure("settle", txID, req.PolicyID, rcpt.ID, err)
 	}
 
 	slog.Info("settlement completed", "tx_id", txID, "round", result.Round, "receipt_id", rcpt.ID)
