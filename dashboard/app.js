@@ -48,8 +48,8 @@ function addTxRow(item, compliant) {
     const tbody = document.getElementById('tx-body');
     const row = document.createElement('tr');
 
-    const txId = item.transaction_id;
-    const policyId = item.policy_id;
+    const txId = item.transaction_id || '';
+    const policyId = item.policy_id || '';
     const time = new Date(item.timestamp).toLocaleTimeString();
     const statusClass = compliant ? 'compliant' : 'violation';
     const statusText = compliant ? 'Compliant' : 'Violation';
@@ -57,13 +57,13 @@ function addTxRow(item, compliant) {
         ? `Receipt #${item.seq_no}`
         : item.violated_clause || 'Path violation';
 
-    row.innerHTML = `
-        <td><code>${txId}</code></td>
-        <td><code>${policyId}</code></td>
-        <td><span class="status-badge ${statusClass}">${statusText}</span></td>
-        <td>${details}</td>
-        <td>${time}</td>
-    `;
+    row.append(
+        tableCodeCell(txId),
+        tableCodeCell(policyId),
+        tableStatusCell(statusClass, statusText),
+        tableTextCell(details),
+        tableTextCell(time),
+    );
 
     tbody.prepend(row);
 }
@@ -72,13 +72,20 @@ function addAlertCard(v) {
     const list = document.getElementById('alert-list');
     const card = document.createElement('div');
     card.className = 'alert-card';
-    card.innerHTML = `
-        <div class="severity">${v.severity}</div>
-        <div class="message">${v.violated_clause}</div>
-        <div style="margin-top: 0.5rem; font-size: 0.75rem; color: var(--text-dim)">
-            TX: ${v.transaction_id} | ${new Date(v.timestamp).toLocaleString()}
-        </div>
-    `;
+
+    const severity = document.createElement('div');
+    severity.className = 'severity';
+    severity.textContent = v.severity || '';
+
+    const message = document.createElement('div');
+    message.className = 'message';
+    message.textContent = v.violated_clause || '';
+
+    const meta = document.createElement('div');
+    meta.className = 'alert-meta';
+    meta.textContent = `TX: ${v.transaction_id || ''} | ${new Date(v.timestamp).toLocaleString()}`;
+
+    card.append(severity, message, meta);
     list.prepend(card);
 }
 
@@ -96,61 +103,72 @@ function displayPrefilterResults(result) {
     const container = document.getElementById('prefilter-results');
     if (!container) return;
 
-    container.innerHTML = '';
+    container.replaceChildren();
 
     if (result.compliant && result.compliant.length > 0) {
         result.compliant.forEach(path => {
-            const card = document.createElement('div');
-            card.className = 'prefilter-card compliant';
-            card.style.borderLeft = '4px solid #22c55e';
-            card.style.padding = '0.75rem';
-            card.style.marginBottom = '0.5rem';
-            card.style.background = 'rgba(34, 197, 94, 0.08)';
-            card.style.borderRadius = '6px';
-
-            const hopsStr = path.hops.map(h => h.ia).join(' -> ');
-            card.innerHTML = `
-                <div style="font-weight: 600; color: #22c55e;">COMPLIANT</div>
-                <div style="font-size: 0.85rem; margin-top: 0.25rem;">
-                    <code>${path.fingerprint || 'path'}</code>
-                </div>
-                <div style="font-size: 0.8rem; color: var(--text-dim, #888); margin-top: 0.25rem;">
-                    ${hopsStr}
-                </div>
-            `;
-            container.appendChild(card);
+            container.appendChild(prefilterCard(path, true));
         });
     }
 
     if (result.non_compliant && result.non_compliant.length > 0) {
         result.non_compliant.forEach(path => {
-            const card = document.createElement('div');
-            card.className = 'prefilter-card non-compliant';
-            card.style.borderLeft = '4px solid #6b7280';
-            card.style.padding = '0.75rem';
-            card.style.marginBottom = '0.5rem';
-            card.style.background = 'rgba(107, 114, 128, 0.08)';
-            card.style.borderRadius = '6px';
-            card.style.opacity = '0.5';
-
-            const hopsStr = path.hops.map(h => h.ia).join(' -> ');
-            card.innerHTML = `
-                <div style="font-weight: 600; color: #6b7280;">NON-COMPLIANT</div>
-                <div style="font-size: 0.85rem; margin-top: 0.25rem;">
-                    <code>${path.fingerprint || 'path'}</code>
-                </div>
-                <div style="font-size: 0.8rem; color: var(--text-dim, #888); margin-top: 0.25rem;">
-                    ${hopsStr}
-                </div>
-            `;
-            container.appendChild(card);
+            container.appendChild(prefilterCard(path, false));
         });
     }
 
     if ((!result.compliant || result.compliant.length === 0) &&
         (!result.non_compliant || result.non_compliant.length === 0)) {
-        container.innerHTML = '<p style="color: var(--text-dim, #888);">No paths to display.</p>';
+        const empty = document.createElement('p');
+        empty.className = 'empty-state';
+        empty.textContent = 'No paths to display.';
+        container.appendChild(empty);
     }
+}
+
+function tableTextCell(value) {
+    const td = document.createElement('td');
+    td.textContent = value == null ? '' : String(value);
+    return td;
+}
+
+function tableCodeCell(value) {
+    const td = document.createElement('td');
+    const code = document.createElement('code');
+    code.textContent = value == null ? '' : String(value);
+    td.appendChild(code);
+    return td;
+}
+
+function tableStatusCell(statusClass, statusText) {
+    const td = document.createElement('td');
+    const badge = document.createElement('span');
+    badge.className = `status-badge ${statusClass}`;
+    badge.textContent = statusText;
+    td.appendChild(badge);
+    return td;
+}
+
+function prefilterCard(path, compliant) {
+    const card = document.createElement('div');
+    card.className = `prefilter-card ${compliant ? 'compliant' : 'non-compliant'}`;
+
+    const status = document.createElement('div');
+    status.className = 'prefilter-status';
+    status.textContent = compliant ? 'COMPLIANT' : 'NON-COMPLIANT';
+
+    const fingerprint = document.createElement('div');
+    fingerprint.className = 'prefilter-fingerprint';
+    const code = document.createElement('code');
+    code.textContent = path.fingerprint || 'path';
+    fingerprint.appendChild(code);
+
+    const hops = document.createElement('div');
+    hops.className = 'prefilter-hops';
+    hops.textContent = (path.hops || []).map(h => h.ia || '').join(' -> ');
+
+    card.append(status, fingerprint, hops);
+    return card;
 }
 
 async function filterPaths(policyId, paths) {
