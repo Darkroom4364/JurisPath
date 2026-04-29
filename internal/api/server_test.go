@@ -28,7 +28,45 @@ type testEnv struct {
 	audit  *audit.AuditLog
 }
 
+type failingAppendReceiptStore struct {
+	inner receipt.Store
+	err   error
+}
+
+func (s *failingAppendReceiptStore) Append(_ *model.ComplianceReceipt) error {
+	return s.err
+}
+
+func (s *failingAppendReceiptStore) GetByTxID(txID string) (*model.ComplianceReceipt, error) {
+	return s.inner.GetByTxID(txID)
+}
+
+func (s *failingAppendReceiptStore) GetByID(id string) (*model.ComplianceReceipt, error) {
+	return s.inner.GetByID(id)
+}
+
+func (s *failingAppendReceiptStore) List() ([]*model.ComplianceReceipt, error) {
+	return s.inner.List()
+}
+
+func (s *failingAppendReceiptStore) Count() (int, error) {
+	return s.inner.Count()
+}
+
+func (s *failingAppendReceiptStore) Last() (*model.ComplianceReceipt, error) {
+	return s.inner.Last()
+}
+
+func (s *failingAppendReceiptStore) ListRange(fromSeq, toSeq uint64) ([]*model.ComplianceReceipt, error) {
+	return s.inner.ListRange(fromSeq, toSeq)
+}
+
 func setupTestEnv(t *testing.T) *testEnv {
+	t.Helper()
+	return setupTestEnvWithReceiptStore(t, receipt.NewMemoryStore())
+}
+
+func setupTestEnvWithReceiptStore(t *testing.T, rs receipt.Store) *testEnv {
 	t.Helper()
 
 	pol := &policy.Policy{
@@ -53,7 +91,6 @@ func setupTestEnv(t *testing.T) *testEnv {
 		t.Fatalf("creating receipt generator: %v", err)
 	}
 
-	rs := receipt.NewMemoryStore()
 	vs := violation.NewMemoryViolationStore()
 	det := violation.NewDetector(vs)
 	ext := &scion.MockPathExtractor{}
@@ -148,6 +185,48 @@ func TestSettleCompliantPath(t *testing.T) {
 	}
 	if compliance["receipt"] == nil {
 		t.Fatal("expected a receipt in compliance response")
+	}
+}
+
+func TestNewHTTPServer_HardeningDefaults(t *testing.T) {
+	t.Parallel()
+
+	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	tests := []struct {
+		name string
+		addr string
+	}{
+		{name: "standard address", addr: "127.0.0.1:8080"},
+		{name: "empty address", addr: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := NewHTTPServer(tc.addr, handler)
+			if srv.Addr != tc.addr {
+				t.Fatalf("expected addr %q, got %q", tc.addr, srv.Addr)
+			}
+			if srv.Handler == nil {
+				t.Fatal("expected configured handler to be non-nil")
+			}
+			if srv.ReadHeaderTimeout != defaultReadHeaderTimeout {
+				t.Fatalf("expected ReadHeaderTimeout=%s, got %s", defaultReadHeaderTimeout, srv.ReadHeaderTimeout)
+			}
+			if srv.ReadTimeout != defaultReadTimeout {
+				t.Fatalf("expected ReadTimeout=%s, got %s", defaultReadTimeout, srv.ReadTimeout)
+			}
+			if srv.WriteTimeout != defaultWriteTimeout {
+				t.Fatalf("expected WriteTimeout=%s, got %s", defaultWriteTimeout, srv.WriteTimeout)
+			}
+			if srv.IdleTimeout != defaultIdleTimeout {
+				t.Fatalf("expected IdleTimeout=%s, got %s", defaultIdleTimeout, srv.IdleTimeout)
+			}
+			if srv.MaxHeaderBytes != defaultMaxHeaderBytes {
+				t.Fatalf("expected MaxHeaderBytes=%d, got %d", defaultMaxHeaderBytes, srv.MaxHeaderBytes)
+			}
+		})
 	}
 }
 
@@ -403,6 +482,125 @@ func TestHealthEndpoint(t *testing.T) {
 	if health["audit_healthy"] != true {
 		t.Errorf("expected audit_healthy=true, got %v", health["audit_healthy"])
 	}
+}
+
+func TestReceiptPersistenceFailureAudits(t *testing.T) {
+	tests := []struct {
+		name        string
+		call        func(t *testing.T, url string)
+		wantContext string
+	}{
+		{
+			name: "check endpoint persists failure audit and returns internal error",
+			call: func(t *testing.T, url string) {
+				body, err := json.Marshal(CheckRequest{
+					TransactionID: "tx-check-fail",
+					PolicyID:      "test-policy",
+					RawPath:       compliantPath(t),
+				})
+				if err != nil {
+					t.Fatalf("marshal request: %v", err)
+				}
+				resp, err := http.Post(url+"/api/check", "application/json", bytes.NewReader(body))
+				if err != nil {
+					t.Fatalf("POST /api/check: %v", err)
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode != http.StatusInternalServerError {
+					t.Fatalf("expected 500, got %d", resp.StatusCode)
+				}
+			},
+			wantContext: "check",
+		},
+		{
+			name: "settle endpoint persists failure audit and still returns success",
+			call: func(t *testing.T, url string) {
+				resp, result := postSettle(t, url, SettleRequest{
+					TransactionID: "tx-settle-fail",
+					From:          "CH",
+					To:            "EU",
+					Amount:        100,
+					Currency:      "CHF",
+					PolicyID:      "test-policy",
+					RawPath:       compliantPath(t),
+				})
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("expected 200, got %d: %v", resp.StatusCode, result)
+				}
+				consensus, ok := result["consensus"].(map[string]any)
+				if !ok || consensus["confirmed"] != true {
+					t.Fatalf("expected consensus.confirmed=true, got %v", result["consensus"])
+				}
+				compliance, ok := result["compliance"].(map[string]any)
+				if !ok || compliance["receipt"] == nil {
+					t.Fatalf("expected compliance receipt in response, got %v", result["compliance"])
+				}
+				if result["receipt_persisted"] != false {
+					t.Fatalf("expected receipt_persisted=false, got %v", result["receipt_persisted"])
+				}
+				if result["persistence_warning"] == "" {
+					t.Fatalf("expected non-empty persistence_warning, got %v", result["persistence_warning"])
+				}
+			},
+			wantContext: "settle",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := setupTestEnvWithReceiptStore(t, &failingAppendReceiptStore{
+				inner: receipt.NewMemoryStore(),
+				err:   errors.New("disk full"),
+			})
+
+			tt.call(t, env.server.URL)
+			details := waitForAuditEvent(t, env.audit, "receipt_persist_failure", 2*time.Second)
+
+			if details["context"] != tt.wantContext {
+				t.Fatalf("context = %v, want %q", details["context"], tt.wantContext)
+			}
+			if details["code"] != "RECEIPT_PERSISTENCE_FAILED" {
+				t.Fatalf("code = %v, want RECEIPT_PERSISTENCE_FAILED", details["code"])
+			}
+			if details["error"] != "disk full" {
+				t.Fatalf("error = %v, want %q", details["error"], "disk full")
+			}
+			if details["policy_id"] != "test-policy" {
+				t.Fatalf("policy_id = %v, want test-policy", details["policy_id"])
+			}
+			if details["receipt_id"] == "" {
+				t.Fatal("expected non-empty receipt_id")
+			}
+		})
+	}
+}
+
+func waitForAuditEvent(t *testing.T, al *audit.AuditLog, eventType string, timeout time.Duration) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		count, err := al.Count()
+		if err != nil {
+			t.Fatalf("counting audit entries: %v", err)
+		}
+		entries, err := al.List(0, count)
+		if err != nil {
+			t.Fatalf("listing audit entries: %v", err)
+		}
+		for i := len(entries) - 1; i >= 0; i-- {
+			if entries[i].EventType != eventType {
+				continue
+			}
+			var details map[string]any
+			if err := json.Unmarshal(entries[i].Details, &details); err != nil {
+				t.Fatalf("unmarshaling audit details: %v", err)
+			}
+			return details
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for audit event type %q", eventType)
+	return nil
 }
 
 func postCheck(t *testing.T, url string, req CheckRequest) (*http.Response, map[string]any) {

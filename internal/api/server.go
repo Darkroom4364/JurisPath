@@ -161,6 +161,18 @@ func (s *Server) audit(eventType string, details any) {
 	}
 }
 
+func (s *Server) auditReceiptPersistenceFailure(context string, txID, policyID, receiptID string, err error) {
+	s.audit("receipt_persist_failure", map[string]any{
+		"context":    context,
+		"tx_id":      txID,
+		"policy_id":  policyID,
+		"receipt_id": receiptID,
+		"outcome":    "error",
+		"code":       "RECEIPT_PERSISTENCE_FAILED",
+		"error":      err.Error(),
+	})
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	failures := s.auditFailures.Load()
 	count, _ := s.receipts.Count()
@@ -186,15 +198,38 @@ func (s *Server) Handler() http.Handler {
 	return recoveryMiddleware(s.mux)
 }
 
+const (
+	// Conservative listener hardening to reduce slowloris/resource-exhaustion risk.
+	defaultReadHeaderTimeout = 5 * time.Second
+	defaultReadTimeout       = 30 * time.Second
+	defaultWriteTimeout      = 30 * time.Second
+	defaultIdleTimeout       = 120 * time.Second
+	defaultMaxHeaderBytes    = 1 << 20 // 1 MB
+)
+
+// NewHTTPServer returns the standard hardened HTTP server configuration for
+// JurisPath API listeners.
+func NewHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: defaultReadHeaderTimeout,
+		ReadTimeout:       defaultReadTimeout,
+		WriteTimeout:      defaultWriteTimeout,
+		IdleTimeout:       defaultIdleTimeout,
+		MaxHeaderBytes:    defaultMaxHeaderBytes,
+	}
+}
+
 // ListenAndServe starts the HTTP server.
 func (s *Server) ListenAndServe(addr string) error {
-	return http.ListenAndServe(addr, s.Handler())
+	return NewHTTPServer(addr, s.Handler()).ListenAndServe()
 }
 
 // ListenAndServeTLS starts the HTTPS server with the given certificate
 // and private key files.
 func (s *Server) ListenAndServeTLS(addr, certFile, keyFile string) error {
-	return http.ListenAndServeTLS(addr, certFile, keyFile, s.Handler())
+	return NewHTTPServer(addr, s.Handler()).ListenAndServeTLS(certFile, keyFile)
 }
 
 // CheckRequest is the payload for POST /api/check.
@@ -254,6 +289,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.receipts.Append(rcpt); err != nil {
 			slog.Error("failed to persist receipt", "tx_id", req.TransactionID, "receipt_id", rcpt.ID, "error", err)
+			s.auditReceiptPersistenceFailure("check", req.TransactionID, req.PolicyID, rcpt.ID, err)
 			s.audit("check", map[string]any{"tx_id": req.TransactionID, "policy_id": req.PolicyID, "outcome": "error", "code": "INTERNAL_ERROR", "error": err.Error()})
 			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fmt.Sprintf("persisting receipt failed: %v", err))
 			return
@@ -327,8 +363,10 @@ type SettleRequest struct {
 
 // SettleResponse is returned by POST /api/settle.
 type SettleResponse struct {
-	Consensus  *dlt.ConsensusResult `json:"consensus"`
-	Compliance *model.PolicyResult  `json:"compliance,omitempty"`
+	Consensus          *dlt.ConsensusResult `json:"consensus"`
+	Compliance         *model.PolicyResult  `json:"compliance,omitempty"`
+	ReceiptPersisted   *bool                `json:"receipt_persisted,omitempty"`
+	PersistenceWarning string               `json:"persistence_warning,omitempty"`
 }
 
 func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
@@ -477,6 +515,12 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.receipts.Append(rcpt); err != nil {
 		slog.Error("failed to persist receipt during settlement", "tx_id", txID, "error", err)
+		s.auditReceiptPersistenceFailure("settle", txID, req.PolicyID, rcpt.ID, err)
+		// Consensus and ledger state are authoritative for settlement success;
+		// return the issued receipt while surfacing the local persistence gap.
+		persisted := false
+		resp.ReceiptPersisted = &persisted
+		resp.PersistenceWarning = fmt.Sprintf("receipt %s was issued but not persisted locally", rcpt.ID)
 	}
 
 	slog.Info("settlement completed", "tx_id", txID, "round", result.Round, "receipt_id", rcpt.ID)
@@ -634,6 +678,10 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		slog.Warn("failed to disable SSE write deadline", "remote", r.RemoteAddr, "error", err)
+	}
 
 	ch := s.detector.Subscribe()
 	defer s.detector.Unsubscribe(ch)
