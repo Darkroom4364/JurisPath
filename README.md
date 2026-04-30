@@ -132,6 +132,7 @@ default. Local demo targets set `JURISPATH_UNAUTHENTICATED_API=true` explicitly.
 | `GET` | `/api/ledger` | View ledger state |
 | `GET` | `/api/transactions` | View transaction history |
 | `GET` | `/api/events` | SSE stream for real-time violation alerts |
+| `POST` | `/api/rotate-key` | Rotate the oracle signing key and archive the old key. Requires `X-JurisPath-Admin-Token`. |
 
 ## Project Structure
 
@@ -163,10 +164,12 @@ policies/          Jurisdiction policy YAML files
 | `JURISPATH_LISTEN` | `:8080` | Server listen address |
 | `JURISPATH_POLICY_DIR` | `policies` | Path to jurisdiction policy YAML files |
 | `JURISPATH_DASHBOARD_DIR` | `dashboard` | Path to dashboard static files |
+| `JURISPATH_ORACLE_KEY` | `data/oracle.key` | Active oracle signing key path. `/api/rotate-key` archives this file before installing a new key. |
 | `JURISPATH_TLS_CERT` | *(empty)* | TLS certificate path. Must be set with `JURISPATH_TLS_KEY`. |
 | `JURISPATH_TLS_KEY` | *(empty)* | TLS private key path. Must be set with `JURISPATH_TLS_CERT`. |
 | `JURISPATH_INSECURE` | `false` | Explicitly allow plaintext HTTP startup for local demo/dev mode. |
 | `JURISPATH_API_TOKEN` | *(empty)* | Bearer token required for `/api/*` endpoints. |
+| `JURISPATH_ADMIN_TOKEN` | *(empty)* | Privileged token required in `X-JurisPath-Admin-Token` for `/api/rotate-key`. |
 | `JURISPATH_UNAUTHENTICATED_API` | `false` | Explicitly allow unauthenticated API access for local demo/dev mode. |
 | `JURISPATH_DEMO_BASE_URL` | `http://localhost:8080` | Base URL used by `cmd/demo`. |
 | `JURISPATH_DEMO_API_TOKEN` | *(empty)* | Bearer token used by `cmd/demo`; falls back to `JURISPATH_API_TOKEN`. |

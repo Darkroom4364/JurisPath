@@ -71,36 +71,8 @@ func NewGeneratorFromFile(path string) (*Generator, error) {
 		return nil, fmt.Errorf("generating Ed25519 key: %w", err)
 	}
 
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("creating key directory: %w", err)
-	}
-
-	tmpFile, err := os.CreateTemp(dir, ".oracle-key-*")
-	if err != nil {
-		return nil, fmt.Errorf("creating temp key file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-
-	var buf []byte
-	buf = append(buf, keyMagic...)
-	buf = append(buf, priv.Seed()...)
-
-	if _, err := tmpFile.Write(buf); err != nil {
-		tmpFile.Close() //nolint:errcheck // cleanup on error
-		os.Remove(tmpPath)
-		return nil, fmt.Errorf("writing oracle key: %w", err)
-	}
-	if err := tmpFile.Chmod(0600); err != nil {
-		tmpFile.Close() //nolint:errcheck // cleanup on error
-		os.Remove(tmpPath)
-		return nil, fmt.Errorf("setting key file permissions: %w", err)
-	}
-	tmpFile.Close() //nolint:errcheck // flushed via Write above
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
-		return nil, fmt.Errorf("renaming key file: %w", err)
+	if err := writeKeyFile(path, priv); err != nil {
+		return nil, err
 	}
 
 	slog.Info("oracle key generated and saved", "path", path)
@@ -110,9 +82,58 @@ func NewGeneratorFromFile(path string) (*Generator, error) {
 // NewGeneratorWithKeys creates a receipt generator with provided keys.
 func NewGeneratorWithKeys(priv ed25519.PrivateKey, pub ed25519.PublicKey) *Generator {
 	return &Generator{
-		privateKey: priv,
-		publicKey:  pub,
+		privateKey: append([]byte(nil), priv...),
+		publicKey:  append([]byte(nil), pub...),
 	}
+}
+
+// RotateKeyFile archives the current key file, writes a new oracle key, and
+// swaps the generator to the new key without resetting sequence/hash state.
+func (g *Generator) RotateKeyFile(path string) (string, error) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return "", fmt.Errorf("generating Ed25519 key: %w", err)
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("creating key directory: %w", err)
+	}
+
+	tmpPath, err := writeTempKeyFile(dir, priv)
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmpPath) //nolint:errcheck // cleanup if rename path does not consume it
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	archivePath := rotationArchivePath(path)
+	if _, err := os.Stat(path); err == nil {
+		if err := os.Rename(path, archivePath); err != nil {
+			return "", fmt.Errorf("archiving oracle key: %w", err)
+		}
+	} else if os.IsNotExist(err) {
+		archivePath = ""
+	} else {
+		return "", fmt.Errorf("checking oracle key file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		if archivePath != "" {
+			if restoreErr := os.Rename(archivePath, path); restoreErr != nil {
+				return archivePath, fmt.Errorf("installing rotated oracle key: %w; restoring archived key: %v", err, restoreErr)
+			}
+		}
+		return archivePath, fmt.Errorf("installing rotated oracle key: %w", err)
+	}
+
+	g.privateKey = priv
+	g.publicKey = pub
+
+	slog.Info("oracle key rotated", "path", path, "archive", archivePath)
+	return archivePath, nil
 }
 
 // Issue creates a signed compliance receipt for a compliant transaction.
@@ -128,7 +149,7 @@ func (g *Generator) Issue(txID, policyID string, path *model.SCIONPath) (*model.
 		Path:            *path,
 		SeqNo:           g.seqNo,
 		Timestamp:       time.Now().UTC(),
-		OraclePublicKey: g.publicKey,
+		OraclePublicKey: append([]byte(nil), g.publicKey...),
 		PreviousHash:    g.lastHash,
 	}
 
@@ -228,5 +249,56 @@ func marshalForSigning(r *model.ComplianceReceipt) ([]byte, error) {
 
 // PublicKey returns the oracle's public key.
 func (g *Generator) PublicKey() ed25519.PublicKey {
-	return g.publicKey
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]byte(nil), g.publicKey...)
+}
+
+func writeKeyFile(path string, priv ed25519.PrivateKey) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("creating key directory: %w", err)
+	}
+
+	tmpPath, err := writeTempKeyFile(dir, priv)
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath) //nolint:errcheck // cleanup on failure
+		return fmt.Errorf("renaming key file: %w", err)
+	}
+	return nil
+}
+
+func writeTempKeyFile(dir string, priv ed25519.PrivateKey) (string, error) {
+	tmpFile, err := os.CreateTemp(dir, ".oracle-key-*")
+	if err != nil {
+		return "", fmt.Errorf("creating temp key file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	var buf []byte
+	buf = append(buf, keyMagic...)
+	buf = append(buf, priv.Seed()...)
+
+	if _, err := tmpFile.Write(buf); err != nil {
+		tmpFile.Close() //nolint:errcheck // cleanup on error
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("writing oracle key: %w", err)
+	}
+	if err := tmpFile.Chmod(0600); err != nil {
+		tmpFile.Close() //nolint:errcheck // cleanup on error
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("setting key file permissions: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("closing oracle key file: %w", err)
+	}
+	return tmpPath, nil
+}
+
+func rotationArchivePath(path string) string {
+	return fmt.Sprintf("%s.%s.rotated", path, time.Now().UTC().Format("20060102T150405.000000000Z"))
 }

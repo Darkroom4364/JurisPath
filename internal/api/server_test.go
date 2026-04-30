@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/jurispath/jurispath/internal/policy"
 	"github.com/jurispath/jurispath/internal/receipt"
 	"github.com/jurispath/jurispath/internal/scion"
+	"github.com/jurispath/jurispath/internal/security"
 	"github.com/jurispath/jurispath/internal/violation"
 	"github.com/jurispath/jurispath/pkg/model"
 )
@@ -95,6 +97,20 @@ func setupTestEnvWithAuthToken(t *testing.T, token string) *testEnv {
 
 func setupTestEnvWithReceiptStoreExtractorAndOptions(t *testing.T, rs receipt.Store, ext scion.PathExtractor, opts ...ServerOption) *testEnv {
 	t.Helper()
+	return setupTestEnvWithGeneratorReceiptStoreExtractorAndOptions(t, mustGenerator(t), rs, ext, opts...)
+}
+
+func mustGenerator(t *testing.T) *receipt.Generator {
+	t.Helper()
+	gen, err := receipt.NewGenerator()
+	if err != nil {
+		t.Fatalf("creating receipt generator: %v", err)
+	}
+	return gen
+}
+
+func setupTestEnvWithGeneratorReceiptStoreExtractorAndOptions(t *testing.T, gen *receipt.Generator, rs receipt.Store, ext scion.PathExtractor, opts ...ServerOption) *testEnv {
+	t.Helper()
 
 	pol := &policy.Policy{
 		ID:          "test-policy",
@@ -112,11 +128,6 @@ func setupTestEnvWithReceiptStoreExtractorAndOptions(t *testing.T, rs receipt.St
 
 	ledger := dlt.NewLedger(validators)
 	consensus := dlt.NewConsensusEngine(ledger, validators)
-
-	gen, err := receipt.NewGenerator()
-	if err != nil {
-		t.Fatalf("creating receipt generator: %v", err)
-	}
 
 	vs := violation.NewMemoryViolationStore()
 	det := violation.NewDetector(vs)
@@ -644,6 +655,163 @@ func TestVerifyChainAfterSettle(t *testing.T) {
 	receipts := result["receipts"].([]any)
 	if len(receipts) != 1 {
 		t.Errorf("expected 1 receipt, got %d", len(receipts))
+	}
+}
+
+func TestRotateKeyPreservesVerifiableReceiptChain(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "oracle.key")
+	gen, err := receipt.NewGeneratorFromFile(keyPath)
+	if err != nil {
+		t.Fatalf("creating generator from file: %v", err)
+	}
+	env := setupTestEnvWithGeneratorReceiptStoreExtractorAndOptions(
+		t,
+		gen,
+		receipt.NewMemoryStore(),
+		&scion.MockPathExtractor{},
+		WithAdminToken("admin-token"),
+		WithOracleKeyPath(keyPath),
+	)
+
+	resp, result := postSettle(t, env.server.URL, SettleRequest{
+		TransactionID: "tx-before-rotation",
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first settle expected 200, got %d: %v", resp.StatusCode, result)
+	}
+
+	rotateReq, err := http.NewRequest(http.MethodPost, env.server.URL+"/api/rotate-key", nil)
+	if err != nil {
+		t.Fatalf("creating rotate request: %v", err)
+	}
+	rotateReq.Header.Set("X-JurisPath-Admin-Token", "admin-token")
+	rotateResp, err := http.DefaultClient.Do(rotateReq)
+	if err != nil {
+		t.Fatalf("POST /api/rotate-key: %v", err)
+	}
+	defer rotateResp.Body.Close()
+	if rotateResp.StatusCode != http.StatusOK {
+		t.Fatalf("rotate expected 200, got %d", rotateResp.StatusCode)
+	}
+	var rotateResult RotateKeyResponse
+	if err := json.NewDecoder(rotateResp.Body).Decode(&rotateResult); err != nil {
+		t.Fatalf("decoding rotate response: %v", err)
+	}
+	if bytes.Equal(rotateResult.OldOraclePublicKey, rotateResult.NewOraclePublicKey) {
+		t.Fatal("expected rotated oracle public key to change")
+	}
+	if rotateResult.ArchivedKeyPath == "" {
+		t.Fatal("expected archived key path")
+	}
+	if _, err := os.Stat(rotateResult.ArchivedKeyPath); err != nil {
+		t.Fatalf("expected archived key file to exist: %v", err)
+	}
+
+	resp, result = postSettle(t, env.server.URL, SettleRequest{
+		TransactionID: "tx-after-rotation",
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second settle expected 200, got %d: %v", resp.StatusCode, result)
+	}
+
+	verifyResp, err := http.Get(env.server.URL + "/api/verify-chain")
+	if err != nil {
+		t.Fatalf("GET /api/verify-chain: %v", err)
+	}
+	defer verifyResp.Body.Close()
+	if verifyResp.StatusCode != http.StatusOK {
+		t.Fatalf("verify-chain expected 200, got %d", verifyResp.StatusCode)
+	}
+	var chain VerifyChainResponse
+	if err := json.NewDecoder(verifyResp.Body).Decode(&chain); err != nil {
+		t.Fatalf("decoding verify-chain response: %v", err)
+	}
+	if chain.ChainLength != 2 {
+		t.Fatalf("expected chain length 2, got %d", chain.ChainLength)
+	}
+	if len(chain.OraclePublicKeys) != 2 {
+		t.Fatalf("expected 2 oracle public keys, got %d", len(chain.OraclePublicKeys))
+	}
+	if len(chain.Receipts) != 2 {
+		t.Fatalf("expected 2 receipts, got %d", len(chain.Receipts))
+	}
+	if bytes.Equal(chain.Receipts[0].OraclePublicKey, chain.Receipts[1].OraclePublicKey) {
+		t.Fatal("expected receipts across rotation to carry different oracle keys")
+	}
+
+	validator := security.NewReceiptValidator(5 * time.Minute)
+	for _, key := range chain.OraclePublicKeys {
+		validator.TrustOracleKey(key)
+	}
+	if err := validator.ValidateReceiptChain(chain.Receipts); err != nil {
+		t.Fatalf("rotated receipt chain should validate: %v", err)
+	}
+}
+
+func TestRotateKeyRequiresAdminToken(t *testing.T) {
+	env := setupTestEnvWithGeneratorReceiptStoreExtractorAndOptions(
+		t,
+		mustGenerator(t),
+		receipt.NewMemoryStore(),
+		&scion.MockPathExtractor{},
+	)
+
+	resp, err := http.Post(env.server.URL+"/api/rotate-key", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /api/rotate-key: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 before rotation configuration is inspected, got %d", resp.StatusCode)
+	}
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if result["code"] != "FORBIDDEN" {
+		t.Fatalf("expected code FORBIDDEN, got %v", result["code"])
+	}
+}
+
+func TestRotateKeyRejectsWrongAdminToken(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "oracle.key")
+	gen, err := receipt.NewGeneratorFromFile(keyPath)
+	if err != nil {
+		t.Fatalf("creating generator from file: %v", err)
+	}
+	env := setupTestEnvWithGeneratorReceiptStoreExtractorAndOptions(
+		t,
+		gen,
+		receipt.NewMemoryStore(),
+		&scion.MockPathExtractor{},
+		WithAdminToken("admin-token"),
+		WithOracleKeyPath(keyPath),
+	)
+
+	req, err := http.NewRequest(http.MethodPost, env.server.URL+"/api/rotate-key", nil)
+	if err != nil {
+		t.Fatalf("creating rotate request: %v", err)
+	}
+	req.Header.Set("X-JurisPath-Admin-Token", "wrong-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/rotate-key: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
 	}
 }
 

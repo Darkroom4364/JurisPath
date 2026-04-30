@@ -19,6 +19,7 @@ type Config struct {
 	TLSKey         string // path to TLS private key file
 	AllowInsecure  bool   // explicitly allow plaintext HTTP (JURISPATH_INSECURE=true)
 	APIToken       string // bearer token required for /api/* endpoints
+	AdminToken     string // privileged token for administrative endpoints
 	AllowUnauthAPI bool   // explicitly allow unauthenticated API access for demo/dev
 	ValidatorsFile string // path to validators.yaml
 	SCIONMode      bool   // true = validators communicate over SCION
@@ -39,6 +40,7 @@ func Load() *Config {
 		TLSKey:         os.Getenv("JURISPATH_TLS_KEY"),
 		AllowInsecure:  os.Getenv("JURISPATH_INSECURE") == "true",
 		APIToken:       os.Getenv("JURISPATH_API_TOKEN"),
+		AdminToken:     os.Getenv("JURISPATH_ADMIN_TOKEN"),
 		AllowUnauthAPI: os.Getenv("JURISPATH_UNAUTHENTICATED_API") == "true",
 		ValidatorsFile: envOr("JURISPATH_VALIDATORS", "validators.yaml"),
 		SCIONMode:      os.Getenv("JURISPATH_SCION_MODE") == "true",

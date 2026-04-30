@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jurispath/jurispath/internal/receipt"
@@ -15,6 +16,8 @@ import (
 type ReceiptValidator struct {
 	replayDetector *ReplayDetector
 	maxAge         time.Duration
+	trustedKeysMu  sync.RWMutex
+	trustedKeys    map[string]struct{}
 }
 
 // NewReceiptValidator creates a receipt validator with the given maximum
@@ -24,6 +27,18 @@ func NewReceiptValidator(maxAge time.Duration) *ReceiptValidator {
 		replayDetector: NewReplayDetector(maxAge),
 		maxAge:         maxAge,
 	}
+}
+
+// TrustOracleKey marks an oracle public key as trusted for receipt and chain
+// validation. When any trusted keys are configured, receipts from unknown keys
+// are rejected.
+func (rv *ReceiptValidator) TrustOracleKey(key []byte) {
+	rv.trustedKeysMu.Lock()
+	defer rv.trustedKeysMu.Unlock()
+	if rv.trustedKeys == nil {
+		rv.trustedKeys = make(map[string]struct{})
+	}
+	rv.trustedKeys[string(key)] = struct{}{}
 }
 
 // ValidateReceipt checks that a compliance receipt is authentic, fresh,
@@ -36,6 +51,9 @@ func (rv *ReceiptValidator) ValidateReceipt(r *model.ComplianceReceipt) error {
 	}
 	if !valid {
 		return fmt.Errorf("invalid signature on receipt %s", r.ID)
+	}
+	if !rv.isTrustedKey(r.OraclePublicKey) {
+		return fmt.Errorf("untrusted oracle key on receipt %s", r.ID)
 	}
 
 	// Check receipt age
@@ -54,7 +72,9 @@ func (rv *ReceiptValidator) ValidateReceipt(r *model.ComplianceReceipt) error {
 }
 
 // ValidateReceiptChain validates that a sequence of receipts have consecutive
-// sequence numbers from the same oracle, forming a valid chain.
+// sequence numbers and a valid signature hash chain. Oracle key rotation is
+// allowed when hash continuity is preserved across the key boundary and both
+// adjacent oracle keys are trusted.
 func (rv *ReceiptValidator) ValidateReceiptChain(receipts []*model.ComplianceReceipt) error {
 	if len(receipts) == 0 {
 		return fmt.Errorf("empty receipt chain")
@@ -68,14 +88,6 @@ func (rv *ReceiptValidator) ValidateReceiptChain(receipts []*model.ComplianceRec
 				return fmt.Errorf(
 					"receipt chain broken at index %d: expected seqNo %d, got %d",
 					i, prev.SeqNo+1, r.SeqNo,
-				)
-			}
-
-			// Verify same oracle signed the chain
-			if !bytes.Equal(r.OraclePublicKey, prev.OraclePublicKey) {
-				return fmt.Errorf(
-					"receipt chain broken at index %d: oracle public key changed",
-					i,
 				)
 			}
 
@@ -93,6 +105,14 @@ func (rv *ReceiptValidator) ValidateReceiptChain(receipts []*model.ComplianceRec
 					i, expectedHash[:], r.PreviousHash,
 				)
 			}
+			if !bytes.Equal(r.OraclePublicKey, prev.OraclePublicKey) {
+				if !rv.isTrustedKey(prev.OraclePublicKey) || !rv.isTrustedKey(r.OraclePublicKey) {
+					return fmt.Errorf(
+						"receipt chain broken at index %d: oracle public key changed without trusted rotation",
+						i,
+					)
+				}
+			}
 		}
 
 		// Verify each receipt's signature
@@ -103,7 +123,20 @@ func (rv *ReceiptValidator) ValidateReceiptChain(receipts []*model.ComplianceRec
 		if !valid {
 			return fmt.Errorf("receipt %d (%s) has invalid signature", i, r.ID)
 		}
+		if !rv.isTrustedKey(r.OraclePublicKey) {
+			return fmt.Errorf("receipt %d (%s) uses untrusted oracle key", i, r.ID)
+		}
 	}
 
 	return nil
+}
+
+func (rv *ReceiptValidator) isTrustedKey(key []byte) bool {
+	rv.trustedKeysMu.RLock()
+	defer rv.trustedKeysMu.RUnlock()
+	if len(rv.trustedKeys) == 0 {
+		return true
+	}
+	_, ok := rv.trustedKeys[string(key)]
+	return ok
 }

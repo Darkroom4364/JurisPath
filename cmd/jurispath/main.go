@@ -179,7 +179,20 @@ func run() int {
 	if cfg.APIToken == "" {
 		slog.Warn("JurisPath API authentication disabled by explicit local/demo opt-in")
 	}
-	srv := api.NewServer(policies, gen, extractor, ledger, consensus, receiptStore, detector, auditLog, cfg.DashboardDir, api.WithBearerToken(cfg.APIToken))
+	srv := api.NewServer(
+		policies,
+		gen,
+		extractor,
+		ledger,
+		consensus,
+		receiptStore,
+		detector,
+		auditLog,
+		cfg.DashboardDir,
+		api.WithBearerToken(cfg.APIToken),
+		api.WithAdminToken(cfg.AdminToken),
+		api.WithOracleKeyPath(cfg.OracleKeyPath),
+	)
 	defer srv.Close()
 	httpServer := api.NewHTTPServer(cfg.ListenAddr, srv.Handler())
 
