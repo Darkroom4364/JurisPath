@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,6 +27,8 @@ type Config struct {
 	SCIONMode      bool   // true = validators communicate over SCION
 	SCIONDaemon    string // SCION daemon address (e.g. "127.0.0.1:30255")
 	ValidatorID    string // this node's validator ID (required in SCION mode)
+	ThresholdK     int    // optional threshold receipt signature quorum
+	ThresholdN     int    // optional threshold receipt signature group size
 }
 
 // Load reads configuration from environment variables with defaults.
@@ -48,6 +51,8 @@ func Load() *Config {
 		SCIONMode:      os.Getenv("JURISPATH_SCION_MODE") == "true",
 		SCIONDaemon:    envOr("JURISPATH_SCION_DAEMON", "127.0.0.1:30255"),
 		ValidatorID:    os.Getenv("JURISPATH_VALIDATOR_ID"),
+		ThresholdK:     envIntOrInvalid("JURISPATH_THRESHOLD_K"),
+		ThresholdN:     envIntOrInvalid("JURISPATH_THRESHOLD_N"),
 	}
 }
 
@@ -77,6 +82,18 @@ func (c *Config) Validate() error {
 	}
 	if c.APIToken == "" && !c.AllowUnauthAPI {
 		return fmt.Errorf("API authentication not configured; set JURISPATH_API_TOKEN, or set JURISPATH_UNAUTHENTICATED_API=true for local/demo mode")
+	}
+	if c.ThresholdK < 0 {
+		return fmt.Errorf("JURISPATH_THRESHOLD_K must be a non-negative integer")
+	}
+	if c.ThresholdN < 0 {
+		return fmt.Errorf("JURISPATH_THRESHOLD_N must be a non-negative integer")
+	}
+	if (c.ThresholdK == 0) != (c.ThresholdN == 0) {
+		return fmt.Errorf("both JURISPATH_THRESHOLD_K and JURISPATH_THRESHOLD_N must be set to enable threshold receipt signing")
+	}
+	if c.ThresholdK > c.ThresholdN {
+		return fmt.Errorf("JURISPATH_THRESHOLD_K (%d) cannot exceed JURISPATH_THRESHOLD_N (%d)", c.ThresholdK, c.ThresholdN)
 	}
 	return nil
 }
@@ -126,4 +143,16 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envIntOrInvalid(key string) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return -1
+	}
+	return n
 }

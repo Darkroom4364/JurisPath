@@ -19,6 +19,7 @@ import (
 	"github.com/jurispath/jurispath/internal/policy"
 	"github.com/jurispath/jurispath/internal/receipt"
 	"github.com/jurispath/jurispath/internal/scion"
+	"github.com/jurispath/jurispath/internal/security"
 	"github.com/jurispath/jurispath/internal/violation"
 )
 
@@ -80,6 +81,15 @@ func run() int {
 		slog.Info("TRC-backed receipt proof provider initialized", "dir", cfg.TRCDir)
 	} else {
 		slog.Warn("using placeholder receipt ISD proofs; set JURISPATH_TRC_DIR for TRC-backed proof material")
+	}
+	if cfg.ThresholdK > 0 || cfg.ThresholdN > 0 {
+		threshold, err := security.NewThresholdOracle(cfg.ThresholdK, cfg.ThresholdN)
+		if err != nil {
+			slog.Error("failed to initialize threshold receipt signer", "k", cfg.ThresholdK, "n", cfg.ThresholdN, "error", err)
+			return 1
+		}
+		gen.WithThresholdSigner(threshold)
+		slog.Info("threshold receipt signing enabled", "k", cfg.ThresholdK, "n", cfg.ThresholdN)
 	}
 
 	extractor := selectPathExtractor(cfg)

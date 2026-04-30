@@ -26,11 +26,17 @@ type Generator struct {
 	seqNo      uint64
 	lastHash   []byte // sha256 of previous receipt's signature
 	proofs     ISDProofProvider
+	threshold  ThresholdSigner
 }
 
 // ISDProofProvider constructs proof material for an AS hop.
 type ISDProofProvider interface {
 	BuildProof(hop model.ASHop) (model.ISDProof, error)
+}
+
+// ThresholdSigner adds optional k-of-n attestations to issued receipts.
+type ThresholdSigner interface {
+	SignThreshold(data []byte) ([]model.ThresholdSignature, int, int, error)
 }
 
 // NewGenerator creates a receipt generator with a fresh Ed25519 key pair.
@@ -102,6 +108,14 @@ func (g *Generator) WithProofProvider(provider ISDProofProvider) *Generator {
 		provider = PlaceholderProofProvider{}
 	}
 	g.proofs = provider
+	return g
+}
+
+// WithThresholdSigner configures optional threshold attestations for receipts.
+func (g *Generator) WithThresholdSigner(signer ThresholdSigner) *Generator {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.threshold = signer
 	return g
 }
 
@@ -204,6 +218,17 @@ func (g *Generator) Issue(txID, policyID string, path *model.SCIONPath) (*model.
 		return nil, fmt.Errorf("marshaling receipt for signing: %w", err)
 	}
 	receipt.Signature = ed25519.Sign(g.privateKey, payload)
+
+	if g.threshold != nil {
+		signatures, k, n, err := g.threshold.SignThreshold(payload)
+		if err != nil {
+			g.seqNo--
+			return nil, fmt.Errorf("threshold signing receipt: %w", err)
+		}
+		receipt.ThresholdK = k
+		receipt.ThresholdN = n
+		receipt.ThresholdSignatures = signatures
+	}
 
 	// Update chain state
 	h := sha256.Sum256(receipt.Signature)

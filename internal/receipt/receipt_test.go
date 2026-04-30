@@ -36,6 +36,22 @@ func (legacyProofProvider) BuildProof(hop model.ASHop) (model.ISDProof, error) {
 	return model.ISDProof{IA: hop.IA, ISD: hop.ISD}, nil
 }
 
+type testThresholdSigner struct {
+	err     error
+	payload []byte
+}
+
+func (s *testThresholdSigner) SignThreshold(data []byte) ([]model.ThresholdSignature, int, int, error) {
+	if s.err != nil {
+		return nil, 0, 0, s.err
+	}
+	s.payload = append([]byte(nil), data...)
+	return []model.ThresholdSignature{
+		{OracleID: "oracle-0", Signature: []byte("sig-0"), PublicKey: []byte("pub-0")},
+		{OracleID: "oracle-1", Signature: []byte("sig-1"), PublicKey: []byte("pub-1")},
+	}, 2, 3, nil
+}
+
 func TestKeyFile_CreateAndReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "oracle.key")
 
@@ -227,6 +243,80 @@ func TestGenerator_IssueAndVerify(t *testing.T) {
 	valid, _ = Verify(rcpt)
 	if valid {
 		t.Error("tampered receipt should not verify")
+	}
+}
+
+func TestGenerator_IssueAddsThresholdAttestations(t *testing.T) {
+	gen, err := NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+	signer := &testThresholdSigner{}
+	gen.WithThresholdSigner(signer)
+
+	path := &model.SCIONPath{
+		Hops:        []model.ASHop{{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"}},
+		Fingerprint: "threshold-fp",
+	}
+	rcpt, err := gen.Issue("tx-threshold", "policy-v1", path)
+	if err != nil {
+		t.Fatalf("issuing receipt: %v", err)
+	}
+
+	if rcpt.ThresholdK != 2 {
+		t.Fatalf("ThresholdK = %d, want 2", rcpt.ThresholdK)
+	}
+	if rcpt.ThresholdN != 3 {
+		t.Fatalf("ThresholdN = %d, want 3", rcpt.ThresholdN)
+	}
+	if len(rcpt.ThresholdSignatures) != 2 {
+		t.Fatalf("expected 2 threshold signatures, got %d", len(rcpt.ThresholdSignatures))
+	}
+	valid, err := Verify(rcpt)
+	if err != nil {
+		t.Fatalf("verifying receipt: %v", err)
+	}
+	if !valid {
+		t.Fatal("receipt with threshold attestations should verify")
+	}
+	payload, err := marshalForSigning(rcpt)
+	if err != nil {
+		t.Fatalf("marshaling payload: %v", err)
+	}
+	if !bytes.Equal(signer.payload, payload) {
+		t.Fatal("threshold signer should receive the canonical receipt signing payload")
+	}
+	if bytes.Contains(payload, []byte("threshold_signatures")) {
+		t.Fatal("threshold signatures should be omitted from canonical signing payload")
+	}
+}
+
+func TestGenerator_IssueFailsWhenThresholdSignerFails(t *testing.T) {
+	gen, err := NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+	gen.WithThresholdSigner(&testThresholdSigner{err: errors.New("threshold unavailable")})
+
+	path := &model.SCIONPath{
+		Hops:        []model.ASHop{{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"}},
+		Fingerprint: "threshold-fail",
+	}
+	_, err = gen.Issue("tx-threshold-fail", "policy-v1", path)
+	if err == nil {
+		t.Fatal("expected threshold signer error")
+	}
+	if !strings.Contains(err.Error(), "threshold signing receipt") {
+		t.Fatalf("expected threshold signing error, got %v", err)
+	}
+
+	gen.WithThresholdSigner(nil)
+	rcpt, err := gen.Issue("tx-threshold-ok", "policy-v1", path)
+	if err != nil {
+		t.Fatalf("issuing after threshold failure: %v", err)
+	}
+	if rcpt.SeqNo != 1 {
+		t.Fatalf("failed threshold issuance should not consume sequence number, got seq %d", rcpt.SeqNo)
 	}
 }
 
