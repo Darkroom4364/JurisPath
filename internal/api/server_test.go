@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -29,6 +30,14 @@ type testEnv struct {
 	api    *Server
 	ledger *dlt.Ledger
 	audit  *audit.AuditLog
+}
+
+type persistentTestEnv struct {
+	server     *httptest.Server
+	api        *Server
+	audit      *audit.AuditLog
+	receipts   *receipt.BoltStore
+	violations *violation.BoltViolationStore
 }
 
 type failingAppendReceiptStore struct {
@@ -187,6 +196,211 @@ func postSettle(t *testing.T, url string, req SettleRequest) (*http.Response, ma
 	json.NewDecoder(resp.Body).Decode(&result)
 	resp.Body.Close()
 	return resp, result
+}
+
+func postSettleResponse(t *testing.T, url string, req SettleRequest) (*http.Response, SettleResponse) {
+	t.Helper()
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal settle request: %v", err)
+	}
+	resp, err := http.Post(url+"/api/settle", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /api/settle: %v", err)
+	}
+	defer resp.Body.Close()
+	var result SettleResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode settle response: %v", err)
+	}
+	return resp, result
+}
+
+func startPersistentTestEnv(t *testing.T, dir string) *persistentTestEnv {
+	t.Helper()
+
+	gen, err := receipt.NewGeneratorFromFile(filepath.Join(dir, "oracle.key"))
+	if err != nil {
+		t.Fatalf("creating persistent generator: %v", err)
+	}
+	rs, err := receipt.NewBoltStore(filepath.Join(dir, "receipts.db"))
+	if err != nil {
+		t.Fatalf("opening receipt store: %v", err)
+	}
+	if err := gen.SeedChain(rs); err != nil {
+		rs.Close() //nolint:errcheck // cleanup on setup failure
+		t.Fatalf("seeding receipt chain: %v", err)
+	}
+	vs, err := violation.NewBoltViolationStore(filepath.Join(dir, "violations.db"))
+	if err != nil {
+		rs.Close() //nolint:errcheck // cleanup on setup failure
+		t.Fatalf("opening violation store: %v", err)
+	}
+	al, err := audit.NewAuditLog(filepath.Join(dir, "audit.db"))
+	if err != nil {
+		rs.Close() //nolint:errcheck // cleanup on setup failure
+		vs.Close() //nolint:errcheck // cleanup on setup failure
+		t.Fatalf("opening audit log: %v", err)
+	}
+
+	pol := &policy.Policy{
+		ID:          "test-policy",
+		Name:        "Test Policy",
+		Mode:        "strict",
+		AllowedISDs: []uint16{1, 2},
+		Version:     1,
+	}
+	validators := []dlt.ValidatorState{
+		{ID: "CH", Address: "1-ff00:0:110,[127.0.0.1]:30100", Balance: map[string]int64{"CHF": 10000}},
+		{ID: "EU", Address: "2-ff00:0:210,[127.0.0.1]:30200", Balance: map[string]int64{"CHF": 10000}},
+		{ID: "X", Address: "3-ff00:0:310,[127.0.0.1]:30300", Balance: map[string]int64{"CHF": 10000}},
+	}
+	ledger := dlt.NewLedger(validators)
+	consensus := dlt.NewConsensusEngine(ledger, validators)
+	detector := violation.NewDetector(vs)
+	srv := NewServer([]*policy.Policy{pol}, gen, &scion.MockPathExtractor{}, ledger, consensus, rs, detector, al, t.TempDir())
+	ts := httptest.NewServer(srv.Handler())
+
+	return &persistentTestEnv{server: ts, api: srv, audit: al, receipts: rs, violations: vs}
+}
+
+func (env *persistentTestEnv) close(t *testing.T) {
+	t.Helper()
+	env.server.Close()
+	env.api.Close()
+	if err := env.audit.Close(); err != nil {
+		t.Fatalf("closing audit log: %v", err)
+	}
+	if err := env.receipts.Close(); err != nil {
+		t.Fatalf("closing receipt store: %v", err)
+	}
+	if err := env.violations.Close(); err != nil {
+		t.Fatalf("closing violation store: %v", err)
+	}
+}
+
+func TestArchitectureE2ERestartPersistence(t *testing.T) {
+	dir := t.TempDir()
+
+	first := startPersistentTestEnv(t, dir)
+	firstOKResp, firstOK := postSettleResponse(t, first.server.URL, SettleRequest{
+		TransactionID: "tx-e2e-1",
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	})
+	if firstOKResp.StatusCode != http.StatusOK {
+		t.Fatalf("first compliant settlement expected 200, got %d: %+v", firstOKResp.StatusCode, firstOK)
+	}
+	if firstOK.Compliance == nil || firstOK.Compliance.Receipt == nil {
+		t.Fatal("first compliant settlement should return a receipt")
+	}
+	firstReceipt := firstOK.Compliance.Receipt
+	if firstReceipt.SeqNo != 1 {
+		t.Fatalf("first receipt seq = %d, want 1", firstReceipt.SeqNo)
+	}
+
+	blockedResp, blocked := postSettleResponse(t, first.server.URL, SettleRequest{
+		TransactionID: "tx-e2e-2",
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       nonCompliantPath(t),
+	})
+	if blockedResp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("non-compliant settlement expected 422, got %d: %+v", blockedResp.StatusCode, blocked)
+	}
+	if blocked.Compliance == nil || blocked.Compliance.Violation == nil {
+		t.Fatal("non-compliant settlement should return a violation")
+	}
+
+	first.api.Close()
+	assertAuditEvent(t, first.audit, "settle", func(details map[string]any) bool {
+		return details["tx_id"] == "tx-e2e-1" && details["outcome"] == "settled"
+	})
+	assertAuditEvent(t, first.audit, "settle", func(details map[string]any) bool {
+		return details["tx_id"] == "tx-e2e-2" && details["outcome"] == "non_compliant"
+	})
+	first.close(t)
+
+	second := startPersistentTestEnv(t, dir)
+	defer second.close(t)
+
+	violationsResp, err := http.Get(second.server.URL + "/api/violations")
+	if err != nil {
+		t.Fatalf("GET /api/violations: %v", err)
+	}
+	defer violationsResp.Body.Close()
+	if violationsResp.StatusCode != http.StatusOK {
+		t.Fatalf("violations expected 200, got %d", violationsResp.StatusCode)
+	}
+	var violationsList []*model.Violation
+	if err := json.NewDecoder(violationsResp.Body).Decode(&violationsList); err != nil {
+		t.Fatalf("decode violations: %v", err)
+	}
+	if len(violationsList) != 1 || violationsList[0].TransactionID != "tx-e2e-2" {
+		t.Fatalf("expected persisted tx-e2e-2 violation, got %+v", violationsList)
+	}
+
+	secondOKResp, secondOK := postSettleResponse(t, second.server.URL, SettleRequest{
+		TransactionID: "tx-e2e-3",
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	})
+	if secondOKResp.StatusCode != http.StatusOK {
+		t.Fatalf("post-restart settlement expected 200, got %d: %+v", secondOKResp.StatusCode, secondOK)
+	}
+	if secondOK.Compliance == nil || secondOK.Compliance.Receipt == nil {
+		t.Fatal("post-restart settlement should return a receipt")
+	}
+	secondReceipt := secondOK.Compliance.Receipt
+	if secondReceipt.SeqNo != 2 {
+		t.Fatalf("post-restart receipt seq = %d, want 2", secondReceipt.SeqNo)
+	}
+	if !bytes.Equal(firstReceipt.OraclePublicKey, secondReceipt.OraclePublicKey) {
+		t.Fatal("oracle public key should persist across restart")
+	}
+	expectedPreviousHash := sha256.Sum256(firstReceipt.Signature)
+	if !bytes.Equal(secondReceipt.PreviousHash, expectedPreviousHash[:]) {
+		t.Fatalf("post-restart previous hash = %x, want %x", secondReceipt.PreviousHash, expectedPreviousHash[:])
+	}
+
+	verifyResp, err := http.Get(second.server.URL + "/api/verify-chain")
+	if err != nil {
+		t.Fatalf("GET /api/verify-chain: %v", err)
+	}
+	defer verifyResp.Body.Close()
+	if verifyResp.StatusCode != http.StatusOK {
+		t.Fatalf("verify-chain expected 200, got %d", verifyResp.StatusCode)
+	}
+	var chain VerifyChainResponse
+	if err := json.NewDecoder(verifyResp.Body).Decode(&chain); err != nil {
+		t.Fatalf("decode verify-chain: %v", err)
+	}
+	if chain.ChainLength != 2 {
+		t.Fatalf("chain length = %d, want 2", chain.ChainLength)
+	}
+	if len(chain.Receipts) != 2 {
+		t.Fatalf("receipts len = %d, want 2", len(chain.Receipts))
+	}
+	if chain.Receipts[0].TransactionID != "tx-e2e-1" || chain.Receipts[1].TransactionID != "tx-e2e-3" {
+		t.Fatalf("unexpected receipt transaction order: %+v", chain.Receipts)
+	}
+
+	validator := security.NewReceiptValidator(5 * time.Minute)
+	validator.TrustOracleKey(firstReceipt.OraclePublicKey)
+	if err := validator.ValidateReceiptChain(chain.Receipts); err != nil {
+		t.Fatalf("post-restart receipt chain should validate: %v", err)
+	}
 }
 
 func TestSettleCompliantPath(t *testing.T) {
@@ -953,6 +1167,31 @@ func waitForAuditEvent(t *testing.T, al *audit.AuditLog, eventType string, timeo
 	}
 	t.Fatalf("timed out waiting for audit event type %q", eventType)
 	return nil
+}
+
+func assertAuditEvent(t *testing.T, al *audit.AuditLog, eventType string, match func(map[string]any) bool) {
+	t.Helper()
+	count, err := al.Count()
+	if err != nil {
+		t.Fatalf("counting audit entries: %v", err)
+	}
+	entries, err := al.List(0, count)
+	if err != nil {
+		t.Fatalf("listing audit entries: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.EventType != eventType {
+			continue
+		}
+		var details map[string]any
+		if err := json.Unmarshal(entry.Details, &details); err != nil {
+			t.Fatalf("unmarshaling audit details: %v", err)
+		}
+		if match(details) {
+			return
+		}
+	}
+	t.Fatalf("missing audit event %q matching predicate", eventType)
 }
 
 func postCheck(t *testing.T, url string, req CheckRequest) (*http.Response, map[string]any) {
