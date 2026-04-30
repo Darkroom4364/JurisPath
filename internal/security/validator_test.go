@@ -111,6 +111,101 @@ func TestValidateReceipt_Replay(t *testing.T) {
 	}
 }
 
+func TestValidateReceipt_ThresholdAttestationsValid(t *testing.T) {
+	gen, err := receipt.NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+	threshold, err := NewThresholdOracle(2, 3)
+	if err != nil {
+		t.Fatalf("creating threshold oracle: %v", err)
+	}
+	gen.WithThresholdSigner(threshold)
+
+	r := issueTestReceipt(t, gen, "tx-threshold-valid", "policy-1")
+	rv := NewReceiptValidator(5 * time.Minute)
+	if err := rv.ValidateReceipt(r); err != nil {
+		t.Fatalf("threshold receipt should pass: %v", err)
+	}
+}
+
+func TestValidateReceipt_ThresholdAttestationTamperRejected(t *testing.T) {
+	gen, err := receipt.NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+	threshold, err := NewThresholdOracle(2, 3)
+	if err != nil {
+		t.Fatalf("creating threshold oracle: %v", err)
+	}
+	gen.WithThresholdSigner(threshold)
+
+	r := issueTestReceipt(t, gen, "tx-threshold-tamper", "policy-1")
+	r.ThresholdSignatures[0].Signature[0] ^= 0xff
+
+	rv := NewReceiptValidator(5 * time.Minute)
+	err = rv.ValidateReceipt(r)
+	if err == nil {
+		t.Fatal("tampered threshold signature should fail validation")
+	}
+	if !strings.Contains(err.Error(), "threshold signature") {
+		t.Fatalf("expected threshold signature error, got: %v", err)
+	}
+}
+
+func TestValidateReceipt_ThresholdInsufficientSignaturesRejected(t *testing.T) {
+	gen, err := receipt.NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+	threshold, err := NewThresholdOracle(2, 3)
+	if err != nil {
+		t.Fatalf("creating threshold oracle: %v", err)
+	}
+	gen.WithThresholdSigner(threshold)
+
+	r := issueTestReceipt(t, gen, "tx-threshold-insufficient", "policy-1")
+	r.ThresholdSignatures = r.ThresholdSignatures[:1]
+
+	rv := NewReceiptValidator(5 * time.Minute)
+	err = rv.ValidateReceipt(r)
+	if err == nil {
+		t.Fatal("receipt with insufficient threshold signatures should fail validation")
+	}
+	if !strings.Contains(err.Error(), "insufficient threshold signatures") {
+		t.Fatalf("expected insufficient threshold signature error, got: %v", err)
+	}
+}
+
+func TestValidateReceipt_ThresholdTrustList(t *testing.T) {
+	gen, err := receipt.NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+	threshold, err := NewThresholdOracle(2, 3)
+	if err != nil {
+		t.Fatalf("creating threshold oracle: %v", err)
+	}
+	gen.WithThresholdSigner(threshold)
+
+	r := issueTestReceipt(t, gen, "tx-threshold-trust", "policy-1")
+	rv := NewReceiptValidator(5 * time.Minute)
+	rv.TrustThresholdOracleKey(r.ThresholdSignatures[0].PublicKey)
+
+	err = rv.ValidateReceipt(r)
+	if err == nil {
+		t.Fatal("receipt with an untrusted threshold signer should fail validation")
+	}
+	if !strings.Contains(err.Error(), "untrusted key") {
+		t.Fatalf("expected untrusted threshold key error, got: %v", err)
+	}
+
+	rv.TrustThresholdOracleKey(r.ThresholdSignatures[1].PublicKey)
+	if err := rv.ValidateReceipt(r); err != nil {
+		t.Fatalf("receipt with trusted threshold signers should pass: %v", err)
+	}
+}
+
 // --- ValidateReceiptChain ---
 
 func TestValidateReceiptChain_Valid(t *testing.T) {

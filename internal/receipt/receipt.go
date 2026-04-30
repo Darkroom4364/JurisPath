@@ -280,6 +280,12 @@ func Verify(receipt *model.ComplianceReceipt) (bool, error) {
 	return ed25519.Verify(receipt.OraclePublicKey, payload, receipt.Signature), nil
 }
 
+// SigningPayload returns the canonical payload covered by oracle and threshold
+// receipt signatures.
+func SigningPayload(receipt *model.ComplianceReceipt) ([]byte, error) {
+	return marshalForSigning(receipt)
+}
+
 func marshalForSigning(r *model.ComplianceReceipt) ([]byte, error) {
 	// Deterministic serialization of the fields that are signed.
 	// PathRaw contains the actual SCION dataplane bytes when available,
