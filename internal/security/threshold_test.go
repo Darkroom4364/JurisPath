@@ -32,6 +32,35 @@ func TestThresholdOracle_KofN_ExactlyK(t *testing.T) {
 	}
 }
 
+func TestThresholdOracle_SignThresholdReturnsQuorum(t *testing.T) {
+	to, err := NewThresholdOracle(2, 4)
+	if err != nil {
+		t.Fatalf("NewThresholdOracle: %v", err)
+	}
+
+	data := []byte("receipt-payload")
+	sigs, k, n, err := to.SignThreshold(data)
+	if err != nil {
+		t.Fatalf("SignThreshold: %v", err)
+	}
+	if k != 2 {
+		t.Fatalf("k = %d, want 2", k)
+	}
+	if n != 4 {
+		t.Fatalf("n = %d, want 4", n)
+	}
+	if len(sigs) != 2 {
+		t.Fatalf("len(sigs) = %d, want 2", len(sigs))
+	}
+	ok, err := to.Verify(data, sigs)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !ok {
+		t.Fatal("threshold signatures should verify")
+	}
+}
+
 func TestThresholdOracle_KofN_FailsWithKMinus1(t *testing.T) {
 	to, err := NewThresholdOracle(3, 5)
 	if err != nil {

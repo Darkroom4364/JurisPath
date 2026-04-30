@@ -3,14 +3,12 @@ package security
 import (
 	"crypto/ed25519"
 	"fmt"
+
+	"github.com/jurispath/jurispath/pkg/model"
 )
 
 // PartialSignature holds a single oracle's signature contribution.
-type PartialSignature struct {
-	OracleID  string            `json:"oracle_id"`
-	Signature []byte            `json:"signature"`
-	PublicKey ed25519.PublicKey  `json:"public_key"`
-}
+type PartialSignature = model.ThresholdSignature
 
 // OracleInstance represents a single oracle in the threshold group.
 type OracleInstance struct {
@@ -71,6 +69,19 @@ func (to *ThresholdOracle) PartialSign(oracleIdx int, data []byte) (PartialSigna
 		Signature: sig,
 		PublicKey: oracle.PublicKey,
 	}, nil
+}
+
+// SignThreshold returns K valid partial signatures for receipt issuance.
+func (to *ThresholdOracle) SignThreshold(data []byte) ([]model.ThresholdSignature, int, int, error) {
+	signatures := make([]model.ThresholdSignature, 0, to.K)
+	for i := 0; i < to.K; i++ {
+		sig, err := to.PartialSign(i, data)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		signatures = append(signatures, sig)
+	}
+	return signatures, to.K, to.N, nil
 }
 
 // Verify checks that at least K valid signatures exist among the provided

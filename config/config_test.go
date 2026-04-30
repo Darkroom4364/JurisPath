@@ -11,7 +11,8 @@ func TestLoad_Defaults(t *testing.T) {
 		"JURISPATH_LISTEN", "JURISPATH_POLICY_DIR", "JURISPATH_DASHBOARD_DIR",
 		"JURISPATH_DATA_DIR", "JURISPATH_LOG_LEVEL", "JURISPATH_ORACLE_KEY",
 		"JURISPATH_TRC_DIR", "JURISPATH_API_TOKEN", "JURISPATH_ADMIN_TOKEN",
-		"JURISPATH_UNAUTHENTICATED_API",
+		"JURISPATH_UNAUTHENTICATED_API", "JURISPATH_THRESHOLD_K",
+		"JURISPATH_THRESHOLD_N",
 	} {
 		t.Setenv(k, "")
 	}
@@ -46,6 +47,12 @@ func TestLoad_Defaults(t *testing.T) {
 	if c.AllowUnauthAPI {
 		t.Error("AllowUnauthAPI should default to false")
 	}
+	if c.ThresholdK != 0 {
+		t.Errorf("ThresholdK = %d, want 0", c.ThresholdK)
+	}
+	if c.ThresholdN != 0 {
+		t.Errorf("ThresholdN = %d, want 0", c.ThresholdN)
+	}
 }
 
 func TestLoad_EnvOverride(t *testing.T) {
@@ -54,6 +61,8 @@ func TestLoad_EnvOverride(t *testing.T) {
 	t.Setenv("JURISPATH_API_TOKEN", "secret-token")
 	t.Setenv("JURISPATH_ADMIN_TOKEN", "admin-token")
 	t.Setenv("JURISPATH_UNAUTHENTICATED_API", "true")
+	t.Setenv("JURISPATH_THRESHOLD_K", "2")
+	t.Setenv("JURISPATH_THRESHOLD_N", "3")
 	c := Load()
 	if c.ListenAddr != ":9090" {
 		t.Errorf("ListenAddr = %q, want :9090", c.ListenAddr)
@@ -69,6 +78,12 @@ func TestLoad_EnvOverride(t *testing.T) {
 	}
 	if !c.AllowUnauthAPI {
 		t.Error("AllowUnauthAPI should be true")
+	}
+	if c.ThresholdK != 2 {
+		t.Errorf("ThresholdK = %d, want 2", c.ThresholdK)
+	}
+	if c.ThresholdN != 3 {
+		t.Errorf("ThresholdN = %d, want 3", c.ThresholdN)
 	}
 }
 
@@ -117,6 +132,41 @@ func TestValidate_ExplicitUnauthenticatedAPI(t *testing.T) {
 	c := &Config{PolicyDir: t.TempDir(), AllowInsecure: true, AllowUnauthAPI: true}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_ThresholdConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		k    int
+		n    int
+		ok   bool
+	}{
+		{name: "disabled", k: 0, n: 0, ok: true},
+		{name: "valid", k: 2, n: 3, ok: true},
+		{name: "partial k", k: 2, n: 0},
+		{name: "partial n", k: 0, n: 3},
+		{name: "k exceeds n", k: 4, n: 3},
+		{name: "invalid k", k: -1, n: 3},
+		{name: "invalid n", k: 2, n: -1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{
+				PolicyDir:     t.TempDir(),
+				AllowInsecure: true,
+				APIToken:      "secret-token",
+				ThresholdK:    tc.k,
+				ThresholdN:    tc.n,
+			}
+			err := c.Validate()
+			if tc.ok && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatal("expected threshold validation error")
+			}
+		})
 	}
 }
 
