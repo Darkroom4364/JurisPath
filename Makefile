@@ -17,7 +17,6 @@ help:
 
 build:
 	$(GO) build -o bin/jurispath ./cmd/jurispath
-	$(GO) build -o bin/demo ./cmd/demo
 
 test:
 	$(GO) test ./... -v
@@ -37,10 +36,10 @@ run-tls: check-tls-env build
 
 demo: build
 	@echo "Starting JurisPath server..."
-	@sh -c 'JURISPATH_INSECURE=true JURISPATH_UNAUTHENTICATED_API=true ./bin/jurispath & pid=$$!; trap "kill $$pid 2>/dev/null || true" EXIT; sleep 1; echo "Running demo scenarios..."; ./bin/demo'
+	@sh -c 'JURISPATH_INSECURE=true JURISPATH_UNAUTHENTICATED_API=true ./bin/jurispath serve & pid=$$!; trap "kill $$pid 2>/dev/null || true" EXIT; i=0; until ./bin/jurispath health >/dev/null 2>&1; do i=$$((i+1)); if [ $$i -ge 50 ]; then echo "JurisPath server did not become ready"; exit 1; fi; if ! kill -0 $$pid 2>/dev/null; then wait $$pid; exit 1; fi; sleep 0.1; done; echo "Running demo scenarios..."; ./bin/jurispath demo'
 
 demo-tls: build
-	JURISPATH_DEMO_BASE_URL=https://localhost:8080 JURISPATH_DEMO_INSECURE_TLS=true ./bin/demo
+	JURISPATH_CLI_BASE_URL=https://localhost:8080 JURISPATH_CLI_INSECURE_TLS=true ./bin/jurispath demo
 
 tls-cert:
 	mkdir -p deploy/certs
