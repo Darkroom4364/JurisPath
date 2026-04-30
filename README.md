@@ -88,7 +88,9 @@ The `jurispath` binary also includes client commands for a running oracle:
 ./bin/jurispath health
 ./bin/jurispath check --policy chf-eur-settlement-v1 --path 1-ff00:0:110,2-ff00:0:210
 ./bin/jurispath settle --from CH --to EU --amount 100 --currency CHF --policy chf-eur-settlement-v1 --path 1-ff00:0:110,2-ff00:0:210
+./bin/jurispath filter-paths --policy chf-eur-settlement-v1 --paths '1-ff00:0:110,2-ff00:0:210;1-ff00:0:110,3-ff00:0:310'
 ./bin/jurispath verify-chain
+./bin/jurispath demo
 ```
 
 Set `JURISPATH_CLI_BASE_URL` for non-default servers and
@@ -153,7 +155,7 @@ default. Local demo targets set `JURISPATH_UNAUTHENTICATED_API=true` explicitly.
 ```
 cmd/
   jurispath/       Server entry point and CLI client
-  demo/            Demo client exercising all scenarios
+  demo/            Legacy standalone demo client
 config/            Environment-based configuration
 dashboard/         Web UI (HTML/CSS/JS)
 deploy/            Docker Compose and SCION topology

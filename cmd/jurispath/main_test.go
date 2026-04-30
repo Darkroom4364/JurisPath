@@ -149,3 +149,48 @@ func TestCLISettlePostsRequest(t *testing.T) {
 		t.Fatal("expected raw_path to be populated")
 	}
 }
+
+func TestPathsFromSpecs(t *testing.T) {
+	paths, err := pathsFromSpecs("1-ff00:0:110,2-ff00:0:210;1-ff00:0:110,3-ff00:0:310")
+	if err != nil {
+		t.Fatalf("pathsFromSpecs: %v", err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("expected 2 paths, got %d", len(paths))
+	}
+	if len(paths[0].Hops) != 2 || len(paths[1].Hops) != 2 {
+		t.Fatalf("unexpected paths: %+v", paths)
+	}
+}
+
+func TestCLIFilterPathsPostsRequest(t *testing.T) {
+	var got api.FilterPathsRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/filter-paths" {
+			t.Fatalf("path = %q, want /api/filter-paths", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"compliant": []model.SCIONPath{}, "non_compliant": []model.SCIONPath{}})
+	}))
+	defer ts.Close()
+
+	var out bytes.Buffer
+	opts := &cliOptions{baseURL: ts.URL, out: &out, err: io.Discard}
+	err := opts.run([]string{
+		"filter-paths",
+		"--policy", "test-policy",
+		"--paths", "1-ff00:0:110,2-ff00:0:210;1-ff00:0:110,3-ff00:0:310",
+	})
+	if err != nil {
+		t.Fatalf("filter-paths command: %v", err)
+	}
+	if got.PolicyID != "test-policy" {
+		t.Fatalf("PolicyID = %q, want test-policy", got.PolicyID)
+	}
+	if len(got.Paths) != 2 {
+		t.Fatalf("expected 2 candidate paths, got %d", len(got.Paths))
+	}
+}

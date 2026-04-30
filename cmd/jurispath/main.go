@@ -44,7 +44,7 @@ func runWithArgs(args []string) int {
 			return 2
 		}
 		return runServer()
-	case "health", "receipts", "violations", "verify-chain", "check", "settle":
+	case "health", "receipts", "violations", "verify-chain", "check", "settle", "filter-paths", "demo":
 		return runClientCommand(args)
 	default:
 		printUsage(os.Stderr)

@@ -91,6 +91,13 @@ func (opts *cliOptions) run(args []string) error {
 		return opts.check(fs, args[1:])
 	case "settle":
 		return opts.settle(fs, args[1:])
+	case "filter-paths":
+		return opts.filterPaths(fs, args[1:])
+	case "demo":
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return opts.demo()
 	default:
 		printUsage(opts.err)
 		return fmt.Errorf("unknown command %q", command)
@@ -169,6 +176,119 @@ func (opts *cliOptions) settle(fs *flag.FlagSet, args []string) error {
 	return opts.postJSON("/api/settle", req)
 }
 
+func (opts *cliOptions) filterPaths(fs *flag.FlagSet, args []string) error {
+	var policyID, pathSpecs string
+	fs.StringVar(&policyID, "policy", "", "policy ID")
+	fs.StringVar(&pathSpecs, "paths", "", "semicolon-separated candidate paths; each path is comma-separated IA hops")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if policyID == "" {
+		return fmt.Errorf("--policy is required")
+	}
+	paths, err := pathsFromSpecs(pathSpecs)
+	if err != nil {
+		return err
+	}
+	req := api.FilterPathsRequest{PolicyID: policyID, Paths: paths}
+	return opts.postJSON("/api/filter-paths", req)
+}
+
+func (opts *cliOptions) demo() error {
+	fmt.Fprintln(opts.out, "=== Scenario A: Compliant path (ISD-CH -> ISD-EU) ===")
+	if err := opts.demoSettle("tx-chf-eur-001", "CH", "EU", 100, "CHF", "chf-eur-settlement-v1", "1-ff00:0:110,1-ff00:0:111,2-ff00:0:210,2-ff00:0:211"); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(opts.out, "\n=== Scenario B: Non-compliant path (via ISD-X) ===")
+	if err := opts.demoSettle("tx-chf-eur-002", "CH", "EU", 100, "CHF", "chf-eur-settlement-v1", "1-ff00:0:110,3-ff00:0:310,2-ff00:0:210"); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(opts.out, "\n=== Scenario C: Swiss-only settlement ===")
+	if err := opts.demoSettle("tx-chf-chf-001", "CH", "CH", 100, "CHF", "swiss-dlt-act-v1", "1-ff00:0:110,1-ff00:0:111"); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(opts.out, "\n=== Scenario D: Path Pre-filtering ===")
+	return opts.demoFilterPaths("chf-eur-settlement-v1", strings.Join([]string{
+		"1-ff00:0:110,1-ff00:0:111,2-ff00:0:210,2-ff00:0:211",
+		"1-ff00:0:110,3-ff00:0:310,2-ff00:0:210",
+		"1-ff00:0:110,3-ff00:0:310,2-ff00:0:210,3-ff00:0:311",
+	}, ";"))
+}
+
+func (opts *cliOptions) demoSettle(txID, from, to string, amount int64, currency, policyID, pathSpec string) error {
+	rawPath, err := rawPathFromSpec(pathSpec)
+	if err != nil {
+		return err
+	}
+	req := api.SettleRequest{
+		TransactionID: txID,
+		From:          from,
+		To:            to,
+		Amount:        amount,
+		Currency:      currency,
+		PolicyID:      policyID,
+		RawPath:       rawPath,
+	}
+	var result api.SettleResponse
+	status, err := opts.postDecode("/api/settle", req, &result)
+	if err != nil {
+		return err
+	}
+	if status == http.StatusUnprocessableEntity && result.Compliance != nil && result.Compliance.Violation != nil {
+		fmt.Fprintf(opts.out, "  SETTLEMENT BLOCKED - %s\n", result.Compliance.Violation.ViolatedClause)
+		fmt.Fprintf(opts.out, "  Severity: %s, offending hops: %d\n", result.Compliance.Violation.Severity, len(result.Compliance.Violation.OffendingHops))
+		return nil
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("settlement failed with HTTP %d", status)
+	}
+	if result.Consensus == nil || !result.Consensus.Confirmed {
+		return fmt.Errorf("settlement was not confirmed")
+	}
+	if result.Compliance == nil || !result.Compliance.Compliant || result.Compliance.Receipt == nil {
+		return fmt.Errorf("settlement response missing compliance receipt")
+	}
+	fmt.Fprintf(opts.out, "  SETTLED - %s -> %s %d %s\n", from, to, amount, currency)
+	fmt.Fprintf(opts.out, "  Consensus confirmed in round %d\n", result.Consensus.Round)
+	fmt.Fprintf(opts.out, "  Receipt ID: %s, seq #%d\n", result.Compliance.Receipt.ID, result.Compliance.Receipt.SeqNo)
+	if result.ReceiptPersisted != nil && !*result.ReceiptPersisted {
+		fmt.Fprintf(opts.out, "  Persistence warning: %s\n", result.PersistenceWarning)
+	}
+	return nil
+}
+
+func (opts *cliOptions) demoFilterPaths(policyID, pathSpecs string) error {
+	paths, err := pathsFromSpecs(pathSpecs)
+	if err != nil {
+		return err
+	}
+	req := api.FilterPathsRequest{PolicyID: policyID, Paths: paths}
+	var result struct {
+		Compliant    []model.SCIONPath `json:"compliant"`
+		NonCompliant []model.SCIONPath `json:"non_compliant"`
+	}
+	status, err := opts.postDecode("/api/filter-paths", req, &result)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("filter-paths failed with HTTP %d", status)
+	}
+	fmt.Fprintf(opts.out, "  Candidate paths: %d\n", len(paths))
+	fmt.Fprintf(opts.out, "  Compliant: %d\n", len(result.Compliant))
+	for _, p := range result.Compliant {
+		fmt.Fprintf(opts.out, "    [PASS] %s (%d hops)\n", p.Fingerprint, len(p.Hops))
+	}
+	fmt.Fprintf(opts.out, "  Non-compliant: %d\n", len(result.NonCompliant))
+	for _, p := range result.NonCompliant {
+		fmt.Fprintf(opts.out, "    [SKIP] %s (%d hops)\n", p.Fingerprint, len(p.Hops))
+	}
+	return nil
+}
+
 func (opts *cliOptions) getJSON(path string) error {
 	req, err := opts.newRequest(http.MethodGet, path, nil)
 	if err != nil {
@@ -188,6 +308,27 @@ func (opts *cliOptions) postJSON(path string, payload any) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return opts.do(req)
+}
+
+func (opts *cliOptions) postDecode(path string, payload any, result any) (int, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return 0, fmt.Errorf("marshal request: %w", err)
+	}
+	req, err := opts.newRequest(http.MethodPost, path, bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := opts.httpClient().Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close() //nolint:errcheck // response body cleanup
+	if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+		return resp.StatusCode, fmt.Errorf("decode response: %w", err)
+	}
+	return resp.StatusCode, nil
 }
 
 func (opts *cliOptions) newRequest(method, path string, body io.Reader) (*http.Request, error) {
@@ -276,15 +417,38 @@ func rawPathFromSpec(spec string) ([]byte, error) {
 	return raw, nil
 }
 
+func pathsFromSpecs(specs string) ([]model.SCIONPath, error) {
+	if strings.TrimSpace(specs) == "" {
+		return nil, fmt.Errorf("--paths is required")
+	}
+	parts := strings.Split(specs, ";")
+	paths := make([]model.SCIONPath, 0, len(parts))
+	extractor := &scion.MockPathExtractor{}
+	for _, part := range parts {
+		raw, err := rawPathFromSpec(part)
+		if err != nil {
+			return nil, err
+		}
+		path, err := scion.BuildSCIONPath(extractor, raw)
+		if err != nil {
+			return nil, fmt.Errorf("build path: %w", err)
+		}
+		paths = append(paths, *path)
+	}
+	return paths, nil
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
   jurispath serve
+  jurispath demo [--base-url URL] [--token TOKEN]
   jurispath health [--base-url URL] [--token TOKEN]
   jurispath receipts [--base-url URL] [--token TOKEN]
   jurispath violations [--base-url URL] [--token TOKEN]
   jurispath verify-chain [--from-seq N] [--to-seq N] [--base-url URL] [--token TOKEN]
   jurispath check --policy POLICY --path IA[,IA...] [--tx TX] [--base-url URL] [--token TOKEN]
   jurispath settle --from FROM --to TO --amount N --currency CUR --policy POLICY --path IA[,IA...] [--tx TX] [--base-url URL] [--token TOKEN]
+  jurispath filter-paths --policy POLICY --paths 'IA[,IA...];IA[,IA...]' [--base-url URL] [--token TOKEN]
 
 Environment:
   JURISPATH_CLI_BASE_URL       server base URL (default http://localhost:8080)
