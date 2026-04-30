@@ -425,6 +425,10 @@ func pathsFromSpecs(specs string) ([]model.SCIONPath, error) {
 	paths := make([]model.SCIONPath, 0, len(parts))
 	extractor := &scion.MockPathExtractor{}
 	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
 		raw, err := rawPathFromSpec(part)
 		if err != nil {
 			return nil, err
@@ -434,6 +438,9 @@ func pathsFromSpecs(specs string) ([]model.SCIONPath, error) {
 			return nil, fmt.Errorf("build path: %w", err)
 		}
 		paths = append(paths, *path)
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("--paths is required")
 	}
 	return paths, nil
 }

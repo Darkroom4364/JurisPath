@@ -151,7 +151,7 @@ func TestCLISettlePostsRequest(t *testing.T) {
 }
 
 func TestPathsFromSpecs(t *testing.T) {
-	paths, err := pathsFromSpecs("1-ff00:0:110,2-ff00:0:210;1-ff00:0:110,3-ff00:0:310")
+	paths, err := pathsFromSpecs("1-ff00:0:110,2-ff00:0:210;1-ff00:0:110,3-ff00:0:310; ")
 	if err != nil {
 		t.Fatalf("pathsFromSpecs: %v", err)
 	}
@@ -160,6 +160,16 @@ func TestPathsFromSpecs(t *testing.T) {
 	}
 	if len(paths[0].Hops) != 2 || len(paths[1].Hops) != 2 {
 		t.Fatalf("unexpected paths: %+v", paths)
+	}
+}
+
+func TestPathsFromSpecsRejectsOnlyEmptySegments(t *testing.T) {
+	_, err := pathsFromSpecs(" ; ")
+	if err == nil {
+		t.Fatal("expected empty paths error")
+	}
+	if err.Error() != "--paths is required" {
+		t.Fatalf("error = %q, want --paths is required", err)
 	}
 }
 
