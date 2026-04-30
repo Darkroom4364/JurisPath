@@ -1,11 +1,13 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +56,27 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
+	if token == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api" && !strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		presented, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || len(presented) != len(token) || subtle.ConstantTimeCompare([]byte(presented), []byte(token)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="jurispath"`)
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "valid bearer token required")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Server is the JurisPath HTTP API.
 type Server struct {
 	mux           *http.ServeMux
@@ -73,6 +96,18 @@ type Server struct {
 	closeOnce     sync.Once
 	startTime     time.Time
 	dashboardDir  string
+	apiToken      string
+}
+
+// ServerOption customizes API server behavior.
+type ServerOption func(*Server)
+
+// WithBearerToken protects /api/* endpoints with Authorization: Bearer <token>.
+// An empty token leaves authentication disabled for tests and explicit demo mode.
+func WithBearerToken(token string) ServerOption {
+	return func(s *Server) {
+		s.apiToken = token
+	}
 }
 
 // NewServer creates the API server with all dependencies.
@@ -86,6 +121,7 @@ func NewServer(
 	det *violation.Detector,
 	al *audit.AuditLog,
 	dashboardDir string,
+	opts ...ServerOption,
 ) *Server {
 	s := &Server{
 		mux:          http.NewServeMux(),
@@ -102,6 +138,9 @@ func NewServer(
 		auditCh:      make(chan audit.AuditEntry, 4096),
 		startTime:    time.Now(),
 		dashboardDir: dashboardDir,
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 
 	for _, p := range policies {
@@ -204,7 +243,7 @@ func (s *Server) Close() {
 
 // Handler returns the API handler with recovery middleware applied.
 func (s *Server) Handler() http.Handler {
-	return securityHeadersMiddleware(recoveryMiddleware(s.mux))
+	return securityHeadersMiddleware(recoveryMiddleware(bearerAuthMiddleware(s.apiToken, s.mux)))
 }
 
 const (

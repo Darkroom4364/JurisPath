@@ -64,6 +64,8 @@ Three policies are included:
 JurisPath starts fail-closed by default:
 - Set `JURISPATH_TLS_CERT` and `JURISPATH_TLS_KEY` to serve HTTPS.
 - Set `JURISPATH_INSECURE=true` only for explicit local HTTP demo/dev mode.
+- Set `JURISPATH_API_TOKEN` to protect `/api/*`, or set
+  `JURISPATH_UNAUTHENTICATED_API=true` only for explicit local demo/dev mode.
 
 See [docs/fail-closed-tls-startup.md](docs/fail-closed-tls-startup.md) for the full local and Docker workflows.
 
@@ -71,12 +73,12 @@ See [docs/fail-closed-tls-startup.md](docs/fail-closed-tls-startup.md) for the f
 
 ```bash
 make build
-JURISPATH_INSECURE=true ./bin/jurispath
+JURISPATH_INSECURE=true JURISPATH_UNAUTHENTICATED_API=true ./bin/jurispath
 ```
 
 The server starts on `:8080` by default.
 - Local HTTP demo/dev mode: `make run`, then open `http://localhost:8080`
-- Local HTTPS mode: `make tls-cert`, then `JURISPATH_TLS_CERT=deploy/certs/cert.pem JURISPATH_TLS_KEY=deploy/certs/key.pem make run-tls`
+- Local HTTPS mode: `make tls-cert`, then `JURISPATH_TLS_CERT=deploy/certs/cert.pem JURISPATH_TLS_KEY=deploy/certs/key.pem JURISPATH_API_TOKEN=dev-token make run-tls`
 
 ### Run Demo Scenarios
 
@@ -115,6 +117,9 @@ make test
 ```
 
 ## API Endpoints
+
+`/api/*` endpoints require `Authorization: Bearer <JURISPATH_API_TOKEN>` by
+default. Local demo targets set `JURISPATH_UNAUTHENTICATED_API=true` explicitly.
 
 | Method | Path | Description |
 |---|---|---|
@@ -161,7 +166,10 @@ policies/          Jurisdiction policy YAML files
 | `JURISPATH_TLS_CERT` | *(empty)* | TLS certificate path. Must be set with `JURISPATH_TLS_KEY`. |
 | `JURISPATH_TLS_KEY` | *(empty)* | TLS private key path. Must be set with `JURISPATH_TLS_CERT`. |
 | `JURISPATH_INSECURE` | `false` | Explicitly allow plaintext HTTP startup for local demo/dev mode. |
+| `JURISPATH_API_TOKEN` | *(empty)* | Bearer token required for `/api/*` endpoints. |
+| `JURISPATH_UNAUTHENTICATED_API` | `false` | Explicitly allow unauthenticated API access for local demo/dev mode. |
 | `JURISPATH_DEMO_BASE_URL` | `http://localhost:8080` | Base URL used by `cmd/demo`. |
+| `JURISPATH_DEMO_API_TOKEN` | *(empty)* | Bearer token used by `cmd/demo`; falls back to `JURISPATH_API_TOKEN`. |
 | `JURISPATH_DEMO_INSECURE_TLS` | `false` | Allow `cmd/demo` to connect to local self-signed TLS certs. |
 
 ## References

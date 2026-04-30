@@ -101,7 +101,11 @@ func sendFilterPaths(client *http.Client, baseURL, policyID string, paths []mode
 	}
 
 	body, _ := json.Marshal(req)
-	resp, err := client.Post(baseURL+"/api/filter-paths", "application/json", bytes.NewReader(body))
+	httpReq, err := newDemoRequest(baseURL+"/api/filter-paths", body)
+	if err != nil {
+		log.Fatalf("creating filter-paths request failed: %v", err)
+	}
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		log.Fatalf("filter-paths request failed: %v", err)
 	}
@@ -134,7 +138,11 @@ func sendCheck(client *http.Client, baseURL, txID, policyID string, hops []model
 	}
 
 	body, _ := json.Marshal(req)
-	resp, err := client.Post(baseURL+"/api/check", "application/json", bytes.NewReader(body))
+	httpReq, err := newDemoRequest(baseURL+"/api/check", body)
+	if err != nil {
+		log.Fatalf("creating request failed: %v", err)
+	}
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		log.Fatalf("request failed: %v", err)
 	}
@@ -150,4 +158,23 @@ func sendCheck(client *http.Client, baseURL, txID, policyID string, hops []model
 		fmt.Printf("  VIOLATION - %s\n", result.Violation.ViolatedClause)
 		fmt.Printf("  Severity: %s, offending hops: %d\n", result.Violation.Severity, len(result.Violation.OffendingHops))
 	}
+}
+
+func newDemoRequest(url string, body []byte) (*http.Request, error) {
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token := demoAPIToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return req, nil
+}
+
+func demoAPIToken() string {
+	if token := os.Getenv("JURISPATH_DEMO_API_TOKEN"); token != "" {
+		return token
+	}
+	return os.Getenv("JURISPATH_API_TOKEN")
 }

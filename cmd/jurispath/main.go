@@ -176,7 +176,10 @@ func run() int {
 	slog.Debug("audit log opened", "path", filepath.Join(cfg.DataDir, "audit.db"))
 
 	// Start API server
-	srv := api.NewServer(policies, gen, extractor, ledger, consensus, receiptStore, detector, auditLog, cfg.DashboardDir)
+	if cfg.APIToken == "" {
+		slog.Warn("JurisPath API authentication disabled by explicit local/demo opt-in")
+	}
+	srv := api.NewServer(policies, gen, extractor, ledger, consensus, receiptStore, detector, auditLog, cfg.DashboardDir, api.WithBearerToken(cfg.APIToken))
 	defer srv.Close()
 	httpServer := api.NewHTTPServer(cfg.ListenAddr, srv.Handler())
 
