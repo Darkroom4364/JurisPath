@@ -26,7 +26,7 @@ lint:
 	golangci-lint run
 
 run: build
-	JURISPATH_INSECURE=true ./bin/jurispath
+	JURISPATH_INSECURE=true JURISPATH_UNAUTHENTICATED_API=true ./bin/jurispath
 
 check-tls-env:
 	@test -n "$(JURISPATH_TLS_CERT)" || (echo "JURISPATH_TLS_CERT is required for TLS startup targets"; exit 1)
@@ -37,7 +37,7 @@ run-tls: check-tls-env build
 
 demo: build
 	@echo "Starting JurisPath server..."
-	@sh -c 'JURISPATH_INSECURE=true ./bin/jurispath & pid=$$!; trap "kill $$pid 2>/dev/null || true" EXIT; sleep 1; echo "Running demo scenarios..."; ./bin/demo'
+	@sh -c 'JURISPATH_INSECURE=true JURISPATH_UNAUTHENTICATED_API=true ./bin/jurispath & pid=$$!; trap "kill $$pid 2>/dev/null || true" EXIT; sleep 1; echo "Running demo scenarios..."; ./bin/demo'
 
 demo-tls: build
 	JURISPATH_DEMO_BASE_URL=https://localhost:8080 JURISPATH_DEMO_INSECURE_TLS=true ./bin/demo
@@ -57,7 +57,7 @@ topo:
 	deploy/scripts/gen-topo.sh
 
 up:
-	JURISPATH_INSECURE=true docker compose -f deploy/docker-compose.yml up --build
+	JURISPATH_INSECURE=true JURISPATH_UNAUTHENTICATED_API=true docker compose -f deploy/docker-compose.yml up --build
 
 up-tls: check-tls-env
 	JURISPATH_INSECURE=false docker compose -f deploy/docker-compose.yml up --build

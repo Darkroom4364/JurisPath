@@ -10,6 +10,7 @@ func TestLoad_Defaults(t *testing.T) {
 	for _, k := range []string{
 		"JURISPATH_LISTEN", "JURISPATH_POLICY_DIR", "JURISPATH_DASHBOARD_DIR",
 		"JURISPATH_DATA_DIR", "JURISPATH_LOG_LEVEL", "JURISPATH_ORACLE_KEY",
+		"JURISPATH_API_TOKEN", "JURISPATH_UNAUTHENTICATED_API",
 	} {
 		t.Setenv(k, "")
 	}
@@ -32,18 +33,32 @@ func TestLoad_Defaults(t *testing.T) {
 	if c.OracleKeyPath != "data/oracle.key" {
 		t.Errorf("OracleKeyPath = %q, want data/oracle.key", c.OracleKeyPath)
 	}
+	if c.APIToken != "" {
+		t.Errorf("APIToken = %q, want empty", c.APIToken)
+	}
+	if c.AllowUnauthAPI {
+		t.Error("AllowUnauthAPI should default to false")
+	}
 }
 
 func TestLoad_EnvOverride(t *testing.T) {
 	t.Setenv("JURISPATH_LISTEN", ":9090")
+	t.Setenv("JURISPATH_API_TOKEN", "secret-token")
+	t.Setenv("JURISPATH_UNAUTHENTICATED_API", "true")
 	c := Load()
 	if c.ListenAddr != ":9090" {
 		t.Errorf("ListenAddr = %q, want :9090", c.ListenAddr)
 	}
+	if c.APIToken != "secret-token" {
+		t.Errorf("APIToken = %q, want secret-token", c.APIToken)
+	}
+	if !c.AllowUnauthAPI {
+		t.Error("AllowUnauthAPI should be true")
+	}
 }
 
 func TestValidate_ValidDir(t *testing.T) {
-	c := &Config{PolicyDir: t.TempDir(), AllowInsecure: true}
+	c := &Config{PolicyDir: t.TempDir(), AllowInsecure: true, APIToken: "secret-token"}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -68,10 +83,25 @@ func TestValidate_TLSPartial(t *testing.T) {
 }
 
 func TestValidate_NoTLSNoInsecure(t *testing.T) {
-	c := &Config{PolicyDir: t.TempDir()}
+	c := &Config{PolicyDir: t.TempDir(), APIToken: "secret-token"}
 	err := c.Validate()
 	if err == nil {
 		t.Fatal("expected error when neither TLS nor AllowInsecure is set")
+	}
+}
+
+func TestValidate_NoAPITokenNoUnauthenticatedAPI(t *testing.T) {
+	c := &Config{PolicyDir: t.TempDir(), AllowInsecure: true}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("expected error when neither APIToken nor AllowUnauthAPI is set")
+	}
+}
+
+func TestValidate_ExplicitUnauthenticatedAPI(t *testing.T) {
+	c := &Config{PolicyDir: t.TempDir(), AllowInsecure: true, AllowUnauthAPI: true}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -85,14 +115,14 @@ func TestValidate_TLSFilesExist(t *testing.T) {
 	if err := os.WriteFile(keyPath, []byte("key"), 0644); err != nil {
 		t.Fatalf("writing key fixture: %v", err)
 	}
-	c := &Config{PolicyDir: dir, TLSCert: certPath, TLSKey: keyPath}
+	c := &Config{PolicyDir: dir, TLSCert: certPath, TLSKey: keyPath, APIToken: "secret-token"}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestValidate_TLSFilesMissing(t *testing.T) {
-	c := &Config{PolicyDir: t.TempDir(), TLSCert: "/nonexistent/cert.pem", TLSKey: "/nonexistent/key.pem"}
+	c := &Config{PolicyDir: t.TempDir(), TLSCert: "/nonexistent/cert.pem", TLSKey: "/nonexistent/key.pem", APIToken: "secret-token"}
 	err := c.Validate()
 	if err == nil {
 		t.Fatal("expected error for missing TLS cert file")

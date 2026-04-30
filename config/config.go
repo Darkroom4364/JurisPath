@@ -9,15 +9,17 @@ import (
 
 // Config holds application configuration.
 type Config struct {
-	ListenAddr    string
-	PolicyDir     string
-	DashboardDir  string
-	DataDir       string
-	LogLevel      string // "debug", "info", "warn", "error"
-	OracleKeyPath string
+	ListenAddr     string
+	PolicyDir      string
+	DashboardDir   string
+	DataDir        string
+	LogLevel       string // "debug", "info", "warn", "error"
+	OracleKeyPath  string
 	TLSCert        string // path to TLS certificate file (enables HTTPS)
 	TLSKey         string // path to TLS private key file
 	AllowInsecure  bool   // explicitly allow plaintext HTTP (JURISPATH_INSECURE=true)
+	APIToken       string // bearer token required for /api/* endpoints
+	AllowUnauthAPI bool   // explicitly allow unauthenticated API access for demo/dev
 	ValidatorsFile string // path to validators.yaml
 	SCIONMode      bool   // true = validators communicate over SCION
 	SCIONDaemon    string // SCION daemon address (e.g. "127.0.0.1:30255")
@@ -27,19 +29,21 @@ type Config struct {
 // Load reads configuration from environment variables with defaults.
 func Load() *Config {
 	return &Config{
-		ListenAddr:    envOr("JURISPATH_LISTEN", ":8080"),
-		PolicyDir:     envOr("JURISPATH_POLICY_DIR", "policies"),
-		DashboardDir:  envOr("JURISPATH_DASHBOARD_DIR", "dashboard"),
-		DataDir:       envOr("JURISPATH_DATA_DIR", "data/"),
-		LogLevel:      envOr("JURISPATH_LOG_LEVEL", "info"),
+		ListenAddr:     envOr("JURISPATH_LISTEN", ":8080"),
+		PolicyDir:      envOr("JURISPATH_POLICY_DIR", "policies"),
+		DashboardDir:   envOr("JURISPATH_DASHBOARD_DIR", "dashboard"),
+		DataDir:        envOr("JURISPATH_DATA_DIR", "data/"),
+		LogLevel:       envOr("JURISPATH_LOG_LEVEL", "info"),
 		OracleKeyPath:  envOr("JURISPATH_ORACLE_KEY", "data/oracle.key"),
 		TLSCert:        os.Getenv("JURISPATH_TLS_CERT"),
 		TLSKey:         os.Getenv("JURISPATH_TLS_KEY"),
 		AllowInsecure:  os.Getenv("JURISPATH_INSECURE") == "true",
+		APIToken:       os.Getenv("JURISPATH_API_TOKEN"),
+		AllowUnauthAPI: os.Getenv("JURISPATH_UNAUTHENTICATED_API") == "true",
 		ValidatorsFile: envOr("JURISPATH_VALIDATORS", "validators.yaml"),
 		SCIONMode:      os.Getenv("JURISPATH_SCION_MODE") == "true",
-		SCIONDaemon:   envOr("JURISPATH_SCION_DAEMON", "127.0.0.1:30255"),
-		ValidatorID:   os.Getenv("JURISPATH_VALIDATOR_ID"),
+		SCIONDaemon:    envOr("JURISPATH_SCION_DAEMON", "127.0.0.1:30255"),
+		ValidatorID:    os.Getenv("JURISPATH_VALIDATOR_ID"),
 	}
 }
 
@@ -66,6 +70,9 @@ func (c *Config) Validate() error {
 	}
 	if !c.TLSEnabled() && !c.AllowInsecure {
 		return fmt.Errorf("TLS not configured; set JURISPATH_TLS_CERT and JURISPATH_TLS_KEY, or set JURISPATH_INSECURE=true to allow plaintext HTTP")
+	}
+	if c.APIToken == "" && !c.AllowUnauthAPI {
+		return fmt.Errorf("API authentication not configured; set JURISPATH_API_TOKEN, or set JURISPATH_UNAUTHENTICATED_API=true for local/demo mode")
 	}
 	return nil
 }

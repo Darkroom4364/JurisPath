@@ -85,6 +85,16 @@ func setupTestEnvWithExtractor(t *testing.T, ext scion.PathExtractor) *testEnv {
 
 func setupTestEnvWithReceiptStoreAndExtractor(t *testing.T, rs receipt.Store, ext scion.PathExtractor) *testEnv {
 	t.Helper()
+	return setupTestEnvWithReceiptStoreExtractorAndOptions(t, rs, ext)
+}
+
+func setupTestEnvWithAuthToken(t *testing.T, token string) *testEnv {
+	t.Helper()
+	return setupTestEnvWithReceiptStoreExtractorAndOptions(t, receipt.NewMemoryStore(), &scion.MockPathExtractor{}, WithBearerToken(token))
+}
+
+func setupTestEnvWithReceiptStoreExtractorAndOptions(t *testing.T, rs receipt.Store, ext scion.PathExtractor, opts ...ServerOption) *testEnv {
+	t.Helper()
 
 	pol := &policy.Policy{
 		ID:          "test-policy",
@@ -116,7 +126,7 @@ func setupTestEnvWithReceiptStoreAndExtractor(t *testing.T, rs receipt.Store, ex
 		t.Fatalf("creating audit log: %v", err)
 	}
 
-	srv := NewServer([]*policy.Policy{pol}, gen, ext, ledger, consensus, rs, det, al, t.TempDir())
+	srv := NewServer([]*policy.Policy{pol}, gen, ext, ledger, consensus, rs, det, al, t.TempDir(), opts...)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
@@ -257,6 +267,104 @@ func TestHandlerSetsContentSecurityPolicy(t *testing.T) {
 
 	if got := resp.Header.Get("Content-Security-Policy"); got != contentSecurityPolicy {
 		t.Fatalf("Content-Security-Policy = %q, want %q", got, contentSecurityPolicy)
+	}
+}
+
+func TestBearerAuthProtectsAPIEndpoints(t *testing.T) {
+	env := setupTestEnvWithAuthToken(t, "test-token")
+
+	for _, tc := range []struct {
+		name   string
+		header string
+		want   int
+	}{
+		{name: "missing token", want: http.StatusUnauthorized},
+		{name: "wrong token", header: "Bearer wrong", want: http.StatusUnauthorized},
+		{name: "correct token", header: "Bearer test-token", want: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, env.server.URL+"/api/policies", nil)
+			if err != nil {
+				t.Fatalf("creating request: %v", err)
+			}
+			if tc.header != "" {
+				req.Header.Set("Authorization", tc.header)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("GET /api/policies: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != tc.want {
+				t.Fatalf("expected %d, got %d", tc.want, resp.StatusCode)
+			}
+			if tc.want == http.StatusUnauthorized {
+				var result map[string]any
+				if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+					t.Fatalf("decoding error response: %v", err)
+				}
+				if result["code"] != "UNAUTHORIZED" {
+					t.Fatalf("expected code UNAUTHORIZED, got %v", result["code"])
+				}
+				if resp.Header.Get("WWW-Authenticate") == "" {
+					t.Fatal("expected WWW-Authenticate header")
+				}
+			}
+		})
+	}
+}
+
+func TestBearerAuthHealthFollowsAPIRule(t *testing.T) {
+	env := setupTestEnvWithAuthToken(t, "test-token")
+
+	resp, err := http.Get(env.server.URL + "/api/health")
+	if err != nil {
+		t.Fatalf("GET /api/health: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected unauthenticated health request to return 401, got %d", resp.StatusCode)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, env.server.URL+"/api/health", nil)
+	if err != nil {
+		t.Fatalf("creating request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/health: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected authenticated health request to return 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestBearerAuthDoesNotProtectDashboard(t *testing.T) {
+	env := setupTestEnvWithAuthToken(t, "test-token")
+
+	resp, err := http.Get(env.server.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected dashboard request without token to return 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestBearerAuthDisabledWhenTokenEmpty(t *testing.T) {
+	env := setupTestEnvWithAuthToken(t, "")
+
+	resp, err := http.Get(env.server.URL + "/api/policies")
+	if err != nil {
+		t.Fatalf("GET /api/policies: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected empty auth token to leave API unprotected, got %d", resp.StatusCode)
 	}
 }
 
