@@ -29,7 +29,7 @@ func main() {
 		{IA: "2-ff00:0:210", ISD: 2, AS: "ff00:0:210"}, // ISD-EU core
 		{IA: "2-ff00:0:211", ISD: 2, AS: "ff00:0:211"}, // ISD-EU non-core
 	}
-	sendCheck(client, baseURL, "tx-chf-eur-001", "chf-eur-settlement-v1", compliantHops)
+	sendSettle(client, baseURL, "tx-chf-eur-001", "CH", "EU", 100, "CHF", "chf-eur-settlement-v1", compliantHops)
 
 	// Scenario B: Violation — path transits ISD-X
 	fmt.Println("\n=== Scenario B: Non-compliant path (via ISD-X) ===")
@@ -38,7 +38,7 @@ func main() {
 		{IA: "3-ff00:0:310", ISD: 3, AS: "ff00:0:310"}, // ISD-X (unauthorized!)
 		{IA: "2-ff00:0:210", ISD: 2, AS: "ff00:0:210"}, // ISD-EU core
 	}
-	sendCheck(client, baseURL, "tx-chf-eur-002", "chf-eur-settlement-v1", violatingHops)
+	sendSettle(client, baseURL, "tx-chf-eur-002", "CH", "EU", 100, "CHF", "chf-eur-settlement-v1", violatingHops)
 
 	// Scenario C: Swiss-only settlement
 	fmt.Println("\n=== Scenario C: Swiss-only settlement ===")
@@ -46,7 +46,7 @@ func main() {
 		{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"},
 		{IA: "1-ff00:0:111", ISD: 1, AS: "ff00:0:111"},
 	}
-	sendCheck(client, baseURL, "tx-chf-chf-001", "swiss-dlt-act-v1", swissHops)
+	sendSettle(client, baseURL, "tx-chf-chf-001", "CH", "CH", 100, "CHF", "swiss-dlt-act-v1", swissHops)
 
 	// Scenario D: Path pre-filtering (paper Scenario C)
 	// A validator queries available SCION paths and JurisPath indicates which are compliant.
@@ -128,17 +128,21 @@ func sendFilterPaths(client *http.Client, baseURL, policyID string, paths []mode
 	}
 }
 
-func sendCheck(client *http.Client, baseURL, txID, policyID string, hops []model.ASHop) {
+func sendSettle(client *http.Client, baseURL, txID, from, to string, amount int64, currency, policyID string, hops []model.ASHop) {
 	rawPath, _ := scion.NewMockPath(hops)
 
-	req := api.CheckRequest{
+	req := api.SettleRequest{
 		TransactionID: txID,
+		From:          from,
+		To:            to,
+		Amount:        amount,
+		Currency:      currency,
 		PolicyID:      policyID,
 		RawPath:       rawPath,
 	}
 
 	body, _ := json.Marshal(req)
-	httpReq, err := newDemoRequest(baseURL+"/api/check", body)
+	httpReq, err := newDemoRequest(baseURL+"/api/settle", body)
 	if err != nil {
 		log.Fatalf("creating request failed: %v", err)
 	}
@@ -148,15 +152,29 @@ func sendCheck(client *http.Client, baseURL, txID, policyID string, hops []model
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body cleanup
 
-	var result model.PolicyResult
+	var result api.SettleResponse
 	json.NewDecoder(resp.Body).Decode(&result)
 
-	if result.Compliant {
-		fmt.Printf("  COMPLIANT - Receipt ID: %s\n", result.Receipt.ID)
-		fmt.Printf("  Signed by oracle, seq #%d\n", result.Receipt.SeqNo)
-	} else {
-		fmt.Printf("  VIOLATION - %s\n", result.Violation.ViolatedClause)
-		fmt.Printf("  Severity: %s, offending hops: %d\n", result.Violation.Severity, len(result.Violation.OffendingHops))
+	if resp.StatusCode == http.StatusUnprocessableEntity && result.Compliance != nil && result.Compliance.Violation != nil {
+		fmt.Printf("  SETTLEMENT BLOCKED - %s\n", result.Compliance.Violation.ViolatedClause)
+		fmt.Printf("  Severity: %s, offending hops: %d\n", result.Compliance.Violation.Severity, len(result.Compliance.Violation.OffendingHops))
+		return
+	}
+	if resp.StatusCode != http.StatusOK {
+		log.Fatalf("settlement failed with HTTP %d", resp.StatusCode)
+	}
+	if result.Consensus == nil || !result.Consensus.Confirmed {
+		log.Fatalf("settlement was not confirmed: %+v", result.Consensus)
+	}
+	if result.Compliance == nil || !result.Compliance.Compliant || result.Compliance.Receipt == nil {
+		log.Fatalf("settlement response missing compliance receipt")
+	}
+
+	fmt.Printf("  SETTLED - %s -> %s %d %s\n", from, to, amount, currency)
+	fmt.Printf("  Consensus confirmed in round %d\n", result.Consensus.Round)
+	fmt.Printf("  Receipt ID: %s, seq #%d\n", result.Compliance.Receipt.ID, result.Compliance.Receipt.SeqNo)
+	if result.ReceiptPersisted != nil && !*result.ReceiptPersisted {
+		fmt.Printf("  Persistence warning: %s\n", result.PersistenceWarning)
 	}
 }
 
