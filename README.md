@@ -80,6 +80,20 @@ The server starts on `:8080` by default.
 - Local HTTP demo/dev mode: `make run`, then open `http://localhost:8080`
 - Local HTTPS mode: `make tls-cert`, then `JURISPATH_TLS_CERT=deploy/certs/cert.pem JURISPATH_TLS_KEY=deploy/certs/key.pem JURISPATH_API_TOKEN=dev-token make run-tls`
 
+### CLI
+
+The `jurispath` binary also includes client commands for a running oracle:
+
+```bash
+./bin/jurispath health
+./bin/jurispath check --policy chf-eur-settlement-v1 --path 1-ff00:0:110,2-ff00:0:210
+./bin/jurispath settle --from CH --to EU --amount 100 --currency CHF --policy chf-eur-settlement-v1 --path 1-ff00:0:110,2-ff00:0:210
+./bin/jurispath verify-chain
+```
+
+Set `JURISPATH_CLI_BASE_URL` for non-default servers and
+`JURISPATH_CLI_API_TOKEN` or `JURISPATH_API_TOKEN` for authenticated APIs.
+
 ### Run Demo Scenarios
 
 ```bash
@@ -138,7 +152,7 @@ default. Local demo targets set `JURISPATH_UNAUTHENTICATED_API=true` explicitly.
 
 ```
 cmd/
-  jurispath/       Server entry point
+  jurispath/       Server entry point and CLI client
   demo/            Demo client exercising all scenarios
 config/            Environment-based configuration
 dashboard/         Web UI (HTML/CSS/JS)
@@ -174,6 +188,9 @@ policies/          Jurisdiction policy YAML files
 | `JURISPATH_API_TOKEN` | *(empty)* | Bearer token required for `/api/*` endpoints. |
 | `JURISPATH_ADMIN_TOKEN` | *(empty)* | Privileged token required in `X-JurisPath-Admin-Token` for `/api/rotate-key`. |
 | `JURISPATH_UNAUTHENTICATED_API` | `false` | Explicitly allow unauthenticated API access for local demo/dev mode. |
+| `JURISPATH_CLI_BASE_URL` | `http://localhost:8080` | Base URL used by `cmd/jurispath` client commands. |
+| `JURISPATH_CLI_API_TOKEN` | *(empty)* | Bearer token used by `cmd/jurispath` client commands; falls back to `JURISPATH_API_TOKEN`. |
+| `JURISPATH_CLI_INSECURE_TLS` | `false` | Allow `cmd/jurispath` client commands to connect to local self-signed TLS certs. |
 | `JURISPATH_DEMO_BASE_URL` | `http://localhost:8080` | Base URL used by `cmd/demo`. |
 | `JURISPATH_DEMO_API_TOKEN` | *(empty)* | Bearer token used by `cmd/demo`; falls back to `JURISPATH_API_TOKEN`. |
 | `JURISPATH_DEMO_INSECURE_TLS` | `false` | Allow `cmd/demo` to connect to local self-signed TLS certs. |

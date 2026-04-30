@@ -30,6 +30,25 @@ func main() {
 }
 
 func run() int {
+	return runWithArgs(os.Args[1:])
+}
+
+func runWithArgs(args []string) int {
+	if len(args) == 0 {
+		return runServer()
+	}
+	switch args[0] {
+	case "serve":
+		return runServer()
+	case "health", "receipts", "violations", "verify-chain", "check", "settle":
+		return runClientCommand(args)
+	default:
+		printUsage(os.Stderr)
+		return 2
+	}
+}
+
+func runServer() int {
 	cfg := config.Load()
 
 	// Initialize structured logger
