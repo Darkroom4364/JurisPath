@@ -71,10 +71,12 @@ func run() int {
 	}
 	slog.Info("receipt generator initialized", "public_key", gen.PublicKey())
 
-	// Use mock path extractor for now; swap to real snet extractor when
-	// running on a SCION network
-	extractor := &scion.MockPathExtractor{}
-	slog.Warn("using mock path extractor — not connected to SCION daemon")
+	extractor := selectPathExtractor(cfg)
+	if cfg.SCIONMode {
+		slog.Warn("SCION mode rejects API-supplied raw_path until authenticated path evidence is wired")
+	} else {
+		slog.Warn("using mock path extractor - not connected to SCION daemon")
+	}
 
 	// Load validator topology from config file.
 	validatorConfigs, err := config.LoadValidators(cfg.ValidatorsFile)
@@ -222,4 +224,11 @@ func run() int {
 		slog.Info("server shut down gracefully", "addr", cfg.ListenAddr)
 	}
 	return 0
+}
+
+func selectPathExtractor(cfg *config.Config) scion.PathExtractor {
+	if cfg.SCIONMode {
+		return scion.NewRejectingPathExtractor("")
+	}
+	return &scion.MockPathExtractor{}
 }
