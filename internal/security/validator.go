@@ -2,6 +2,7 @@ package security
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"fmt"
 	"sync"
@@ -18,6 +19,8 @@ type ReceiptValidator struct {
 	maxAge         time.Duration
 	trustedKeysMu  sync.RWMutex
 	trustedKeys    map[string]struct{}
+	thresholdMu    sync.RWMutex
+	thresholdKeys  map[string]struct{}
 }
 
 // NewReceiptValidator creates a receipt validator with the given maximum
@@ -41,6 +44,18 @@ func (rv *ReceiptValidator) TrustOracleKey(key []byte) {
 	rv.trustedKeys[string(key)] = struct{}{}
 }
 
+// TrustThresholdOracleKey marks a threshold oracle public key as trusted.
+// When any threshold keys are configured, threshold attestations from unknown
+// keys are rejected.
+func (rv *ReceiptValidator) TrustThresholdOracleKey(key []byte) {
+	rv.thresholdMu.Lock()
+	defer rv.thresholdMu.Unlock()
+	if rv.thresholdKeys == nil {
+		rv.thresholdKeys = make(map[string]struct{})
+	}
+	rv.thresholdKeys[string(key)] = struct{}{}
+}
+
 // ValidateReceipt checks that a compliance receipt is authentic, fresh,
 // and has not been replayed.
 func (rv *ReceiptValidator) ValidateReceipt(r *model.ComplianceReceipt) error {
@@ -54,6 +69,9 @@ func (rv *ReceiptValidator) ValidateReceipt(r *model.ComplianceReceipt) error {
 	}
 	if !rv.isTrustedKey(r.OraclePublicKey) {
 		return fmt.Errorf("untrusted oracle key on receipt %s", r.ID)
+	}
+	if err := rv.validateThresholdAttestations(r); err != nil {
+		return err
 	}
 
 	// Check receipt age
@@ -126,6 +144,57 @@ func (rv *ReceiptValidator) ValidateReceiptChain(receipts []*model.ComplianceRec
 		if !rv.isTrustedKey(r.OraclePublicKey) {
 			return fmt.Errorf("receipt %d (%s) uses untrusted oracle key", i, r.ID)
 		}
+		if err := rv.validateThresholdAttestations(r); err != nil {
+			return fmt.Errorf("receipt %d (%s) threshold validation failed: %w", i, r.ID, err)
+		}
+	}
+
+	return nil
+}
+
+func (rv *ReceiptValidator) validateThresholdAttestations(r *model.ComplianceReceipt) error {
+	if r.ThresholdK == 0 && r.ThresholdN == 0 && len(r.ThresholdSignatures) == 0 {
+		return nil
+	}
+	if r.ThresholdK < 1 {
+		return fmt.Errorf("receipt %s has invalid threshold_k %d", r.ID, r.ThresholdK)
+	}
+	if r.ThresholdN < 1 {
+		return fmt.Errorf("receipt %s has invalid threshold_n %d", r.ID, r.ThresholdN)
+	}
+	if r.ThresholdK > r.ThresholdN {
+		return fmt.Errorf("receipt %s threshold_k %d exceeds threshold_n %d", r.ID, r.ThresholdK, r.ThresholdN)
+	}
+	if len(r.ThresholdSignatures) < r.ThresholdK {
+		return fmt.Errorf("receipt %s has insufficient threshold signatures: got %d, need %d", r.ID, len(r.ThresholdSignatures), r.ThresholdK)
+	}
+	if len(r.ThresholdSignatures) > r.ThresholdN {
+		return fmt.Errorf("receipt %s has too many threshold signatures: got %d, group size %d", r.ID, len(r.ThresholdSignatures), r.ThresholdN)
+	}
+
+	payload, err := receipt.SigningPayload(r)
+	if err != nil {
+		return fmt.Errorf("threshold signing payload error for receipt %s: %w", r.ID, err)
+	}
+
+	seen := make(map[string]struct{}, len(r.ThresholdSignatures))
+	for _, sig := range r.ThresholdSignatures {
+		if sig.OracleID == "" {
+			return fmt.Errorf("receipt %s has threshold signature with empty oracle_id", r.ID)
+		}
+		if _, ok := seen[sig.OracleID]; ok {
+			return fmt.Errorf("receipt %s has duplicate threshold signature from oracle %s", r.ID, sig.OracleID)
+		}
+		seen[sig.OracleID] = struct{}{}
+		if len(sig.PublicKey) != ed25519.PublicKeySize {
+			return fmt.Errorf("receipt %s threshold signature from oracle %s has invalid public key length", r.ID, sig.OracleID)
+		}
+		if !rv.isTrustedThresholdKey(sig.PublicKey) {
+			return fmt.Errorf("receipt %s threshold signature from oracle %s uses untrusted key", r.ID, sig.OracleID)
+		}
+		if !ed25519.Verify(sig.PublicKey, payload, sig.Signature) {
+			return fmt.Errorf("receipt %s threshold signature from oracle %s is invalid", r.ID, sig.OracleID)
+		}
 	}
 
 	return nil
@@ -138,5 +207,15 @@ func (rv *ReceiptValidator) isTrustedKey(key []byte) bool {
 		return true
 	}
 	_, ok := rv.trustedKeys[string(key)]
+	return ok
+}
+
+func (rv *ReceiptValidator) isTrustedThresholdKey(key []byte) bool {
+	rv.thresholdMu.RLock()
+	defer rv.thresholdMu.RUnlock()
+	if len(rv.thresholdKeys) == 0 {
+		return true
+	}
+	_, ok := rv.thresholdKeys[string(key)]
 	return ok
 }
