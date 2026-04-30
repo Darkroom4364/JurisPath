@@ -20,10 +20,12 @@ type ComplianceReceipt struct {
 // ISDProof contains proof of an AS's membership in a specific ISD,
 // derived from CP-PKI certificate chains rooted in the ISD's TRC.
 type ISDProof struct {
-	IA        string `json:"ia"`
-	ISD       uint16 `json:"isd"`
-	TRCSerial uint64 `json:"trc_serial"`
-	CertChain []byte `json:"cert_chain,omitempty"`
+	IA                 string `json:"ia"`
+	ISD                uint16 `json:"isd"`
+	TRCSerial          uint64 `json:"trc_serial"`
+	CertChain          []byte `json:"cert_chain,omitempty"`
+	VerificationStatus string `json:"verification_status,omitempty"`
+	ProofSource        string `json:"proof_source,omitempty"`
 }
 
 // Violation represents a blocked non-compliant path.

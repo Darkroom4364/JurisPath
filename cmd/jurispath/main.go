@@ -70,6 +70,17 @@ func run() int {
 		return 1
 	}
 	slog.Info("receipt generator initialized", "public_key", gen.PublicKey())
+	if cfg.TRCDir != "" {
+		proofs, err := scion.NewTRCProofProvider(cfg.TRCDir)
+		if err != nil {
+			slog.Error("failed to load TRC proof provider", "dir", cfg.TRCDir, "error", err)
+			return 1
+		}
+		gen.WithProofProvider(proofs)
+		slog.Info("TRC-backed receipt proof provider initialized", "dir", cfg.TRCDir)
+	} else {
+		slog.Warn("using placeholder receipt ISD proofs; set JURISPATH_TRC_DIR for TRC-backed proof material")
+	}
 
 	extractor := selectPathExtractor(cfg)
 	if cfg.SCIONMode {

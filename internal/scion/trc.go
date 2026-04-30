@@ -3,12 +3,61 @@ package scion
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/scionproto/scion/pkg/addr"
 	"github.com/scionproto/scion/pkg/scrypto/cppki"
 
 	"github.com/jurispath/jurispath/pkg/model"
 )
+
+// TRCProofProvider builds ISD proofs from signed TRCs loaded from disk.
+type TRCProofProvider struct {
+	trcs map[uint16]*cppki.SignedTRC
+}
+
+// NewTRCProofProvider loads signed TRCs from dir. Files must have the .trc
+// extension and must decode as SCION signed TRCs.
+func NewTRCProofProvider(dir string) (*TRCProofProvider, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, "*.trc"))
+	if err != nil {
+		return nil, fmt.Errorf("globbing TRC directory %q: %w", dir, err)
+	}
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("TRC directory %q contains no .trc files", dir)
+	}
+
+	provider := &TRCProofProvider{trcs: make(map[uint16]*cppki.SignedTRC)}
+	for _, path := range matches {
+		trc, err := LoadTRC(path)
+		if err != nil {
+			return nil, err
+		}
+		isd := uint16(trc.TRC.ID.ISD)
+		if _, ok := provider.trcs[isd]; ok {
+			return nil, fmt.Errorf("duplicate TRC for ISD %d in %q", isd, dir)
+		}
+		provider.trcs[isd] = trc
+	}
+	return provider, nil
+}
+
+// BuildProof constructs a TRC-backed ISD proof for the hop.
+func (p *TRCProofProvider) BuildProof(hop model.ASHop) (model.ISDProof, error) {
+	trc, ok := p.trcs[hop.ISD]
+	if !ok {
+		return model.ISDProof{}, fmt.Errorf("no TRC loaded for ISD %d", hop.ISD)
+	}
+	ia, err := addr.ParseIA(hop.IA)
+	if err != nil {
+		return model.ISDProof{}, fmt.Errorf("parsing IA %q: %w", hop.IA, err)
+	}
+	proof, err := BuildISDProof(trc, ia)
+	if err != nil {
+		return model.ISDProof{}, err
+	}
+	return *proof, nil
+}
 
 // LoadTRC reads and decodes a signed TRC file from disk.
 func LoadTRC(path string) (*cppki.SignedTRC, error) {
@@ -55,9 +104,11 @@ func BuildISDProof(trc *cppki.SignedTRC, ia addr.IA) (*model.ISDProof, error) {
 	}
 
 	return &model.ISDProof{
-		IA:        ia.String(),
-		ISD:       uint16(trc.TRC.ID.ISD),
-		TRCSerial: uint64(trc.TRC.ID.Serial),
-		CertChain: trc.Raw,
+		IA:                 ia.String(),
+		ISD:                uint16(trc.TRC.ID.ISD),
+		TRCSerial:          uint64(trc.TRC.ID.Serial),
+		CertChain:          trc.Raw,
+		VerificationStatus: "verified",
+		ProofSource:        "trc",
 	}, nil
 }

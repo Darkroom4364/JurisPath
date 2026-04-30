@@ -3,6 +3,7 @@ package receipt
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,30 @@ import (
 
 	"github.com/jurispath/jurispath/pkg/model"
 )
+
+type testProofProvider struct {
+	err error
+}
+
+func (p testProofProvider) BuildProof(hop model.ASHop) (model.ISDProof, error) {
+	if p.err != nil {
+		return model.ISDProof{}, p.err
+	}
+	return model.ISDProof{
+		IA:                 hop.IA,
+		ISD:                hop.ISD,
+		TRCSerial:          uint64(1000 + hop.ISD),
+		CertChain:          []byte("test-cert-chain-" + hop.IA),
+		VerificationStatus: "verified",
+		ProofSource:        "test-trc",
+	}, nil
+}
+
+type legacyProofProvider struct{}
+
+func (legacyProofProvider) BuildProof(hop model.ASHop) (model.ISDProof, error) {
+	return model.ISDProof{IA: hop.IA, ISD: hop.ISD}, nil
+}
 
 func TestKeyFile_CreateAndReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "oracle.key")
@@ -202,6 +227,104 @@ func TestGenerator_IssueAndVerify(t *testing.T) {
 	valid, _ = Verify(rcpt)
 	if valid {
 		t.Error("tampered receipt should not verify")
+	}
+}
+
+func TestGenerator_IssueUsesConfiguredProofProvider(t *testing.T) {
+	gen, err := NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+	gen.WithProofProvider(testProofProvider{})
+
+	path := &model.SCIONPath{
+		Hops: []model.ASHop{
+			{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"},
+		},
+		Fingerprint: "abc123",
+	}
+	rcpt, err := gen.Issue("tx-proof", "policy-v1", path)
+	if err != nil {
+		t.Fatalf("issuing receipt: %v", err)
+	}
+	if len(rcpt.ISDProofs) != 1 {
+		t.Fatalf("expected 1 proof, got %d", len(rcpt.ISDProofs))
+	}
+	proof := rcpt.ISDProofs[0]
+	if proof.TRCSerial != 1001 {
+		t.Fatalf("TRCSerial = %d, want 1001", proof.TRCSerial)
+	}
+	if proof.VerificationStatus != "verified" {
+		t.Fatalf("VerificationStatus = %q, want verified", proof.VerificationStatus)
+	}
+	if proof.ProofSource != "test-trc" {
+		t.Fatalf("ProofSource = %q, want test-trc", proof.ProofSource)
+	}
+	if len(proof.CertChain) == 0 {
+		t.Fatal("expected cert chain proof material")
+	}
+	valid, err := Verify(rcpt)
+	if err != nil {
+		t.Fatalf("verifying receipt: %v", err)
+	}
+	if !valid {
+		t.Fatal("receipt with configured proof should verify")
+	}
+}
+
+func TestGenerator_LegacyProofMetadataOmittedFromSigningPayload(t *testing.T) {
+	gen, err := NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+	gen.WithProofProvider(legacyProofProvider{})
+
+	path := &model.SCIONPath{
+		Hops:        []model.ASHop{{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"}},
+		Fingerprint: "legacy-proof",
+	}
+	rcpt, err := gen.Issue("tx-legacy-proof", "policy-v1", path)
+	if err != nil {
+		t.Fatalf("issuing receipt: %v", err)
+	}
+	payload, err := marshalForSigning(rcpt)
+	if err != nil {
+		t.Fatalf("marshaling payload: %v", err)
+	}
+	if bytes.Contains(payload, []byte("verification_status")) {
+		t.Fatal("empty verification_status should be omitted from signing payload")
+	}
+	if bytes.Contains(payload, []byte("proof_source")) {
+		t.Fatal("empty proof_source should be omitted from signing payload")
+	}
+}
+
+func TestGenerator_IssueFailsWhenProofProviderFails(t *testing.T) {
+	gen, err := NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+	gen.WithProofProvider(testProofProvider{err: errors.New("missing TRC")})
+
+	path := &model.SCIONPath{
+		Hops:        []model.ASHop{{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"}},
+		Fingerprint: "abc123",
+	}
+	_, err = gen.Issue("tx-proof-fail", "policy-v1", path)
+	if err == nil {
+		t.Fatal("expected proof provider error")
+	}
+	if !strings.Contains(err.Error(), "building ISD proof") {
+		t.Fatalf("expected ISD proof error, got %v", err)
+	}
+
+	gen.WithProofProvider(testProofProvider{})
+	rcpt, err := gen.Issue("tx-proof-ok", "policy-v1", path)
+	if err != nil {
+		t.Fatalf("issuing after proof failure: %v", err)
+	}
+	if rcpt.SeqNo != 1 {
+		t.Fatalf("failed proof issuance should not consume sequence number, got seq %d", rcpt.SeqNo)
 	}
 }
 

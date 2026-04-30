@@ -165,6 +165,7 @@ policies/          Jurisdiction policy YAML files
 | `JURISPATH_POLICY_DIR` | `policies` | Path to jurisdiction policy YAML files |
 | `JURISPATH_DASHBOARD_DIR` | `dashboard` | Path to dashboard static files |
 | `JURISPATH_ORACLE_KEY` | `data/oracle.key` | Active oracle signing key path. `/api/rotate-key` archives this file before installing a new key. |
+| `JURISPATH_TRC_DIR` | *(empty)* | Optional directory of signed `.trc` files used to populate verified receipt ISD proof material. Empty uses explicit placeholder proofs for local/demo mode. |
 | `JURISPATH_TLS_CERT` | *(empty)* | TLS certificate path. Must be set with `JURISPATH_TLS_KEY`. |
 | `JURISPATH_TLS_KEY` | *(empty)* | TLS private key path. Must be set with `JURISPATH_TLS_CERT`. |
 | `JURISPATH_INSECURE` | `false` | Explicitly allow plaintext HTTP startup for local demo/dev mode. |
