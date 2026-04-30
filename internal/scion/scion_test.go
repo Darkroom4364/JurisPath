@@ -1,6 +1,7 @@
 package scion
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jurispath/jurispath/pkg/model"
@@ -172,3 +173,17 @@ func TestBuildSCIONPath_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestBuildSCIONPath_RejectingExtractor(t *testing.T) {
+	raw, err := NewMockPath(testHops)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = BuildSCIONPath(NewRejectingPathExtractor(""), raw)
+	if err == nil {
+		t.Fatal("expected rejecting extractor to fail")
+	}
+	if !strings.Contains(err.Error(), "SCION mode") {
+		t.Fatalf("error %q does not explain SCION mode rejection", err)
+	}
+}

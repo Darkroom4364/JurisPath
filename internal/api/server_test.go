@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,12 @@ type testEnv struct {
 type failingAppendReceiptStore struct {
 	inner receipt.Store
 	err   error
+}
+
+type rejectingPathExtractor struct{}
+
+func (rejectingPathExtractor) ExtractHops([]byte) ([]model.ASHop, error) {
+	return nil, errors.New("SCION path extraction unavailable")
 }
 
 func (s *failingAppendReceiptStore) Append(_ *model.ComplianceReceipt) error {
@@ -68,6 +75,16 @@ func setupTestEnv(t *testing.T) *testEnv {
 
 func setupTestEnvWithReceiptStore(t *testing.T, rs receipt.Store) *testEnv {
 	t.Helper()
+	return setupTestEnvWithReceiptStoreAndExtractor(t, rs, &scion.MockPathExtractor{})
+}
+
+func setupTestEnvWithExtractor(t *testing.T, ext scion.PathExtractor) *testEnv {
+	t.Helper()
+	return setupTestEnvWithReceiptStoreAndExtractor(t, receipt.NewMemoryStore(), ext)
+}
+
+func setupTestEnvWithReceiptStoreAndExtractor(t *testing.T, rs receipt.Store, ext scion.PathExtractor) *testEnv {
+	t.Helper()
 
 	pol := &policy.Policy{
 		ID:          "test-policy",
@@ -93,7 +110,6 @@ func setupTestEnvWithReceiptStore(t *testing.T, rs receipt.Store) *testEnv {
 
 	vs := violation.NewMemoryViolationStore()
 	det := violation.NewDetector(vs)
-	ext := &scion.MockPathExtractor{}
 
 	al, err := audit.NewAuditLog(filepath.Join(t.TempDir(), "audit.db"))
 	if err != nil {
@@ -296,6 +312,44 @@ func TestSettleNonCompliantPath(t *testing.T) {
 	var lr LedgerResponse
 	json.NewDecoder(ledgerResp.Body).Decode(&lr)
 
+	for _, v := range lr.Validators {
+		if v.Balance["CHF"] != 10000 {
+			t.Fatalf("expected balance 10000 for %s, got %d", v.ID, v.Balance["CHF"])
+		}
+	}
+}
+
+func TestSettlePathExtractionFailure(t *testing.T) {
+	env := setupTestEnvWithExtractor(t, rejectingPathExtractor{})
+
+	resp, result := postSettle(t, env.server.URL, SettleRequest{
+		From:     "CH",
+		To:       "EU",
+		Amount:   100,
+		Currency: "CHF",
+		PolicyID: "test-policy",
+		RawPath:  compliantPath(t),
+	})
+
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d: %v", resp.StatusCode, result)
+	}
+	if result["code"] != "INVALID_REQUEST" {
+		t.Fatalf("expected code INVALID_REQUEST, got %v", result["code"])
+	}
+	if !strings.Contains(result["error"].(string), "path extraction failed") {
+		t.Fatalf("expected path extraction error, got %v", result["error"])
+	}
+
+	ledgerResp, err := http.Get(env.server.URL + "/api/ledger")
+	if err != nil {
+		t.Fatalf("GET /api/ledger: %v", err)
+	}
+	defer ledgerResp.Body.Close()
+	var lr LedgerResponse
+	if err := json.NewDecoder(ledgerResp.Body).Decode(&lr); err != nil {
+		t.Fatalf("decoding ledger response: %v", err)
+	}
 	for _, v := range lr.Validators {
 		if v.Balance["CHF"] != 10000 {
 			t.Fatalf("expected balance 10000 for %s, got %d", v.ID, v.Balance["CHF"])
@@ -708,6 +762,26 @@ func TestCheckInvalidBody(t *testing.T) {
 	}
 	if result["code"] != "INVALID_REQUEST" {
 		t.Fatalf("expected code INVALID_REQUEST, got %v", result["code"])
+	}
+}
+
+func TestCheckPathExtractionFailure(t *testing.T) {
+	env := setupTestEnvWithExtractor(t, rejectingPathExtractor{})
+
+	resp, result := postCheck(t, env.server.URL, CheckRequest{
+		TransactionID: "tx-extract-fail-1",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	})
+
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d: %v", resp.StatusCode, result)
+	}
+	if result["code"] != "INVALID_REQUEST" {
+		t.Fatalf("expected code INVALID_REQUEST, got %v", result["code"])
+	}
+	if !strings.Contains(result["error"].(string), "path extraction failed") {
+		t.Fatalf("expected path extraction error, got %v", result["error"])
 	}
 }
 
