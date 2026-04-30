@@ -410,6 +410,14 @@ func TestSettleNonCompliantPath(t *testing.T) {
 	if compliance["violation"] == nil {
 		t.Fatal("expected a violation in compliance response")
 	}
+	violation, ok := compliance["violation"].(map[string]any)
+	if !ok {
+		t.Fatal("violation has unexpected shape")
+	}
+	txID, ok := violation["transaction_id"].(string)
+	if !ok || txID == "" {
+		t.Fatalf("expected violation transaction_id to be populated, got %v", violation["transaction_id"])
+	}
 
 	// Verify balances unchanged via GET /api/ledger
 	ledgerResp, err := http.Get(env.server.URL + "/api/ledger")

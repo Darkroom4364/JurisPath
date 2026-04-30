@@ -442,6 +442,10 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "PATH_REQUIRED", "raw_path is required for settlement")
 		return
 	}
+	txID := req.TransactionID
+	if txID == "" {
+		txID = uuid.New().String()
+	}
 
 	slog.Debug("settlement requested", "from", req.From, "to", req.To, "amount", req.Amount, "currency", req.Currency, "policy_id", req.PolicyID)
 
@@ -471,9 +475,10 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !checkResult.Compliant {
-		v := s.detector.Record("", req.PolicyID, checkResult.ViolatedClause, path, checkResult.OffendingHops)
+		v := s.detector.Record(txID, req.PolicyID, checkResult.ViolatedClause, path, checkResult.OffendingHops)
 		slog.Warn("settlement blocked — path non-compliant", "policy_id", req.PolicyID, "violation_id", v.ID)
 		s.audit("settle", map[string]any{
+			"tx_id":        txID,
 			"policy_id":    req.PolicyID,
 			"compliant":    false,
 			"outcome":      "non_compliant",
@@ -488,11 +493,6 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Step 2: Path is compliant — proceed to consensus.
-	txID := req.TransactionID
-	if txID == "" {
-		txID = uuid.New().String()
-	}
-
 	tx := &dlt.Transaction{
 		ID:       txID,
 		From:     req.From,
