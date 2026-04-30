@@ -41,9 +41,6 @@ func runClientCommand(args []string) int {
 func defaultCLIOptions(out, err io.Writer) *cliOptions {
 	baseURL := os.Getenv("JURISPATH_CLI_BASE_URL")
 	if baseURL == "" {
-		baseURL = os.Getenv("JURISPATH_DEMO_BASE_URL")
-	}
-	if baseURL == "" {
 		baseURL = defaultCLIBaseURL
 	}
 	token := os.Getenv("JURISPATH_CLI_API_TOKEN")
@@ -53,7 +50,7 @@ func defaultCLIOptions(out, err io.Writer) *cliOptions {
 	return &cliOptions{
 		baseURL:     baseURL,
 		token:       token,
-		insecureTLS: os.Getenv("JURISPATH_CLI_INSECURE_TLS") == "true" || os.Getenv("JURISPATH_DEMO_INSECURE_TLS") == "true",
+		insecureTLS: os.Getenv("JURISPATH_CLI_INSECURE_TLS") == "true",
 		out:         out,
 		err:         err,
 	}

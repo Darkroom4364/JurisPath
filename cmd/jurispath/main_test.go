@@ -50,6 +50,27 @@ func TestRunWithArgsUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestRunWithArgsServeRejectsExtraArgs(t *testing.T) {
+	if code := runWithArgs([]string{"serve", "typo"}); code != 2 {
+		t.Fatalf("runWithArgs serve typo code = %d, want 2", code)
+	}
+}
+
+func TestDefaultCLIOptionsDoNotInheritDemoEnv(t *testing.T) {
+	t.Setenv("JURISPATH_CLI_BASE_URL", "")
+	t.Setenv("JURISPATH_CLI_INSECURE_TLS", "")
+	t.Setenv("JURISPATH_DEMO_BASE_URL", "https://demo.example.test")
+	t.Setenv("JURISPATH_DEMO_INSECURE_TLS", "true")
+
+	opts := defaultCLIOptions(io.Discard, io.Discard)
+	if opts.baseURL != defaultCLIBaseURL {
+		t.Fatalf("baseURL = %q, want %q", opts.baseURL, defaultCLIBaseURL)
+	}
+	if opts.insecureTLS {
+		t.Fatal("insecureTLS should not inherit JURISPATH_DEMO_INSECURE_TLS")
+	}
+}
+
 func TestRawPathFromSpec(t *testing.T) {
 	raw, err := rawPathFromSpec("1-ff00:0:110, 2-ff00:0:210")
 	if err != nil {

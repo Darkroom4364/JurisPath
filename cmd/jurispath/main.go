@@ -39,6 +39,10 @@ func runWithArgs(args []string) int {
 	}
 	switch args[0] {
 	case "serve":
+		if len(args) != 1 {
+			printUsage(os.Stderr)
+			return 2
+		}
 		return runServer()
 	case "health", "receipts", "violations", "verify-chain", "check", "settle":
 		return runClientCommand(args)
