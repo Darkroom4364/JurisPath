@@ -1,7 +1,9 @@
 package security
 
 import (
+	"bytes"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -127,6 +129,81 @@ func TestValidateReceiptChain_Valid(t *testing.T) {
 	}
 }
 
+func TestValidateReceiptChain_AllowsKeyRotationWithHashContinuity(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "oracle.key")
+	gen, err := receipt.NewGeneratorFromFile(keyPath)
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+
+	r1 := issueTestReceipt(t, gen, "tx-1", "policy-1")
+	if _, err := gen.RotateKeyFile(keyPath); err != nil {
+		t.Fatalf("rotating key: %v", err)
+	}
+	r2 := issueTestReceipt(t, gen, "tx-2", "policy-1")
+
+	if bytes.Equal(r1.OraclePublicKey, r2.OraclePublicKey) {
+		t.Fatal("test setup expected different oracle keys")
+	}
+
+	rv := NewReceiptValidator(5 * time.Minute)
+	rv.TrustOracleKey(r1.OraclePublicKey)
+	rv.TrustOracleKey(r2.OraclePublicKey)
+	if err := rv.ValidateReceiptChain([]*model.ComplianceReceipt{r1, r2}); err != nil {
+		t.Fatalf("rotated chain with hash continuity should pass: %v", err)
+	}
+}
+
+func TestValidateReceiptChain_UntrustedKeyRotationRejected(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "oracle.key")
+	gen, err := receipt.NewGeneratorFromFile(keyPath)
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+
+	r1 := issueTestReceipt(t, gen, "tx-1", "policy-1")
+	if _, err := gen.RotateKeyFile(keyPath); err != nil {
+		t.Fatalf("rotating key: %v", err)
+	}
+	r2 := issueTestReceipt(t, gen, "tx-2", "policy-1")
+
+	rv := NewReceiptValidator(5 * time.Minute)
+	rv.TrustOracleKey(r1.OraclePublicKey)
+	err = rv.ValidateReceiptChain([]*model.ComplianceReceipt{r1, r2})
+	if err == nil {
+		t.Fatal("untrusted rotated chain should fail")
+	}
+	if !strings.Contains(err.Error(), "trusted rotation") {
+		t.Fatalf("expected trusted rotation error, got: %v", err)
+	}
+}
+
+func TestValidateReceiptChain_RotationHashMismatchRejected(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "oracle.key")
+	gen, err := receipt.NewGeneratorFromFile(keyPath)
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+
+	r1 := issueTestReceipt(t, gen, "tx-1", "policy-1")
+	if _, err := gen.RotateKeyFile(keyPath); err != nil {
+		t.Fatalf("rotating key: %v", err)
+	}
+	r2 := issueTestReceipt(t, gen, "tx-2", "policy-1")
+	r2.PreviousHash = []byte("wrong-rotation-boundary-hash")
+
+	rv := NewReceiptValidator(5 * time.Minute)
+	rv.TrustOracleKey(r1.OraclePublicKey)
+	rv.TrustOracleKey(r2.OraclePublicKey)
+	err = rv.ValidateReceiptChain([]*model.ComplianceReceipt{r1, r2})
+	if err == nil {
+		t.Fatal("rotated chain with hash mismatch should fail")
+	}
+	if !strings.Contains(err.Error(), "hash mismatch") {
+		t.Fatalf("expected 'hash mismatch' error, got: %v", err)
+	}
+}
+
 func TestValidateReceiptChain_HashMismatch(t *testing.T) {
 	gen, err := receipt.NewGenerator()
 	if err != nil {
@@ -228,4 +305,3 @@ func TestValidateReceiptChain_NilPreviousHashRejected(t *testing.T) {
 		t.Fatalf("expected 'PreviousHash is nil' error, got: %v", err)
 	}
 }
-

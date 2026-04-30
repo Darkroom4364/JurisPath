@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -97,6 +98,8 @@ type Server struct {
 	startTime     time.Time
 	dashboardDir  string
 	apiToken      string
+	adminToken    string
+	oracleKeyPath string
 }
 
 // ServerOption customizes API server behavior.
@@ -107,6 +110,20 @@ type ServerOption func(*Server)
 func WithBearerToken(token string) ServerOption {
 	return func(s *Server) {
 		s.apiToken = token
+	}
+}
+
+// WithAdminToken protects privileged administrative endpoints.
+func WithAdminToken(token string) ServerOption {
+	return func(s *Server) {
+		s.adminToken = token
+	}
+}
+
+// WithOracleKeyPath enables explicit oracle key rotation through the API.
+func WithOracleKeyPath(path string) ServerOption {
+	return func(s *Server) {
+		s.oracleKeyPath = path
 	}
 }
 
@@ -166,6 +183,7 @@ func (s *Server) routes() {
 
 	// Chain verification
 	s.mux.HandleFunc("GET /api/verify-chain", s.handleVerifyChain)
+	s.mux.HandleFunc("POST /api/rotate-key", s.handleRotateKey)
 
 	// DLT settlement endpoints
 	s.mux.HandleFunc("POST /api/settle", s.handleSettle)
@@ -611,9 +629,10 @@ func (s *Server) handleTransactions(w http.ResponseWriter, _ *http.Request) {
 
 // VerifyChainResponse is returned by GET /api/verify-chain.
 type VerifyChainResponse struct {
-	ChainLength     int                        `json:"chain_length"`
-	OraclePublicKey []byte                     `json:"oracle_public_key"`
-	Receipts        []*model.ComplianceReceipt `json:"receipts"`
+	ChainLength      int                        `json:"chain_length"`
+	OraclePublicKey  []byte                     `json:"oracle_public_key"`
+	OraclePublicKeys [][]byte                   `json:"oracle_public_keys"`
+	Receipts         []*model.ComplianceReceipt `json:"receipts"`
 }
 
 func (s *Server) handleVerifyChain(w http.ResponseWriter, r *http.Request) {
@@ -664,13 +683,107 @@ func (s *Server) handleVerifyChain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := VerifyChainResponse{
-		ChainLength:     len(receipts),
-		OraclePublicKey: s.generator.PublicKey(),
-		Receipts:        receipts,
+		ChainLength:      len(receipts),
+		OraclePublicKey:  s.generator.PublicKey(),
+		OraclePublicKeys: receiptPublicKeys(receipts, s.generator.PublicKey()),
+		Receipts:         receipts,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// RotateKeyResponse is returned by POST /api/rotate-key.
+type RotateKeyResponse struct {
+	OldOraclePublicKey []byte  `json:"old_oracle_public_key"`
+	NewOraclePublicKey []byte  `json:"new_oracle_public_key"`
+	ArchivedKeyPath    string  `json:"archived_key_path,omitempty"`
+	RotatedAt          string  `json:"rotated_at"`
+	ReceiptCount       int     `json:"receipt_count"`
+	LastReceiptSeqNo   *uint64 `json:"last_receipt_seq_no,omitempty"`
+}
+
+func (s *Server) handleRotateKey(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdminRequest(r) {
+		writeError(w, http.StatusForbidden, "FORBIDDEN", "insufficient privileges")
+		return
+	}
+	if s.oracleKeyPath == "" {
+		writeError(w, http.StatusServiceUnavailable, "ROTATION_UNAVAILABLE", "oracle key path is not configured")
+		return
+	}
+
+	oldPublicKey := append([]byte(nil), s.generator.PublicKey()...)
+	last, err := s.receipts.Last()
+	if err != nil {
+		slog.Error("failed to load last receipt before key rotation", "error", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to inspect receipt store before key rotation")
+		return
+	}
+
+	archivePath, err := s.generator.RotateKeyFile(s.oracleKeyPath)
+	if err != nil {
+		slog.Error("oracle key rotation failed", "error", err)
+		s.audit("oracle_key_rotation", map[string]any{"outcome": "error", "code": "KEY_ROTATION_FAILED", "error": err.Error()})
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fmt.Sprintf("oracle key rotation failed: %v", err))
+		return
+	}
+
+	count, _ := s.receipts.Count()
+	var lastSeq *uint64
+	if last != nil {
+		seq := last.SeqNo
+		lastSeq = &seq
+	}
+	rotatedAt := time.Now().UTC()
+	s.audit("oracle_key_rotation", map[string]any{
+		"outcome":           "rotated",
+		"old_public_key":    fmt.Sprintf("%x", oldPublicKey),
+		"new_public_key":    fmt.Sprintf("%x", s.generator.PublicKey()),
+		"archived_key_path": archivePath,
+		"receipt_count":     count,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(RotateKeyResponse{
+		OldOraclePublicKey: oldPublicKey,
+		NewOraclePublicKey: s.generator.PublicKey(),
+		ArchivedKeyPath:    archivePath,
+		RotatedAt:          rotatedAt.Format(time.RFC3339Nano),
+		ReceiptCount:       count,
+		LastReceiptSeqNo:   lastSeq,
+	})
+}
+
+func (s *Server) isAdminRequest(r *http.Request) bool {
+	if s.adminToken == "" {
+		return false
+	}
+	presented := r.Header.Get("X-JurisPath-Admin-Token")
+	return len(presented) == len(s.adminToken) &&
+		subtle.ConstantTimeCompare([]byte(presented), []byte(s.adminToken)) == 1
+}
+
+func receiptPublicKeys(receipts []*model.ComplianceReceipt, current []byte) [][]byte {
+	keys := make([][]byte, 0, len(receipts)+1)
+	add := func(key []byte) {
+		if len(key) == 0 {
+			return
+		}
+		for _, existing := range keys {
+			if bytes.Equal(existing, key) {
+				return
+			}
+		}
+		keys = append(keys, append([]byte(nil), key...))
+	}
+	for _, r := range receipts {
+		if r != nil {
+			add(r.OraclePublicKey)
+		}
+	}
+	add(current)
+	return keys
 }
 
 // FilterPathsRequest is the payload for POST /api/filter-paths (Scenario C).

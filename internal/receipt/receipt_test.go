@@ -2,6 +2,7 @@ package receipt
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,6 +88,69 @@ func TestKeyFile_ReceiptsVerifyAcrossReload(t *testing.T) {
 	}
 }
 
+func TestKeyFile_RotatePreservesSequenceAndHashChain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "oracle.key")
+
+	gen, err := NewGeneratorFromFile(path)
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+	oldPublicKey := append([]byte(nil), gen.PublicKey()...)
+
+	p := &model.SCIONPath{
+		Hops:        []model.ASHop{{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"}},
+		Fingerprint: "fp1",
+	}
+	r1, err := gen.Issue("tx-before-rotate", "pol-1", p)
+	if err != nil {
+		t.Fatalf("issuing first receipt: %v", err)
+	}
+
+	archivePath, err := gen.RotateKeyFile(path)
+	if err != nil {
+		t.Fatalf("rotating key: %v", err)
+	}
+	if archivePath == "" {
+		t.Fatal("expected archived key path")
+	}
+	if _, err := os.Stat(archivePath); err != nil {
+		t.Fatalf("expected archived key to exist: %v", err)
+	}
+	if bytes.Equal(oldPublicKey, gen.PublicKey()) {
+		t.Fatal("expected rotated public key to differ")
+	}
+
+	r2, err := gen.Issue("tx-after-rotate", "pol-1", p)
+	if err != nil {
+		t.Fatalf("issuing second receipt: %v", err)
+	}
+	if r2.SeqNo != r1.SeqNo+1 {
+		t.Fatalf("expected rotated receipt seq %d, got %d", r1.SeqNo+1, r2.SeqNo)
+	}
+	expectedHash := sha256.Sum256(r1.Signature)
+	if !bytes.Equal(r2.PreviousHash, expectedHash[:]) {
+		t.Fatalf("rotated receipt previous hash = %x, want %x", r2.PreviousHash, expectedHash[:])
+	}
+
+	for _, r := range []*model.ComplianceReceipt{r1, r2} {
+		valid, err := Verify(r)
+		if err != nil {
+			t.Fatalf("verifying receipt: %v", err)
+		}
+		if !valid {
+			t.Fatalf("receipt %s should verify", r.ID)
+		}
+	}
+
+	reloaded, err := NewGeneratorFromFile(path)
+	if err != nil {
+		t.Fatalf("reloading rotated key: %v", err)
+	}
+	if !bytes.Equal(reloaded.PublicKey(), gen.PublicKey()) {
+		t.Fatal("reloaded generator should use rotated key")
+	}
+}
+
 func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0644)
 }
@@ -94,7 +158,6 @@ func writeFile(path string, data []byte) error {
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
-
 
 func TestGenerator_IssueAndVerify(t *testing.T) {
 	gen, err := NewGenerator()
