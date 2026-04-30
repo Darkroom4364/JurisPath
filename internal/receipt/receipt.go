@@ -25,6 +25,12 @@ type Generator struct {
 	mu         sync.Mutex
 	seqNo      uint64
 	lastHash   []byte // sha256 of previous receipt's signature
+	proofs     ISDProofProvider
+}
+
+// ISDProofProvider constructs proof material for an AS hop.
+type ISDProofProvider interface {
+	BuildProof(hop model.ASHop) (model.ISDProof, error)
 }
 
 // NewGenerator creates a receipt generator with a fresh Ed25519 key pair.
@@ -84,7 +90,33 @@ func NewGeneratorWithKeys(priv ed25519.PrivateKey, pub ed25519.PublicKey) *Gener
 	return &Generator{
 		privateKey: append([]byte(nil), priv...),
 		publicKey:  append([]byte(nil), pub...),
+		proofs:     PlaceholderProofProvider{},
 	}
+}
+
+// WithProofProvider configures the source used to build receipt ISD proofs.
+func (g *Generator) WithProofProvider(provider ISDProofProvider) *Generator {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if provider == nil {
+		provider = PlaceholderProofProvider{}
+	}
+	g.proofs = provider
+	return g
+}
+
+// PlaceholderProofProvider marks proofs as unverified when no TRC proof source
+// is configured. This keeps local mock/demo mode explicit instead of silently
+// presenting IA/ISD pairs as legal proof.
+type PlaceholderProofProvider struct{}
+
+func (PlaceholderProofProvider) BuildProof(hop model.ASHop) (model.ISDProof, error) {
+	return model.ISDProof{
+		IA:                 hop.IA,
+		ISD:                hop.ISD,
+		VerificationStatus: "unverified",
+		ProofSource:        "placeholder",
+	}, nil
 }
 
 // RotateKeyFile archives the current key file, writes a new oracle key, and
@@ -153,12 +185,17 @@ func (g *Generator) Issue(txID, policyID string, path *model.SCIONPath) (*model.
 		PreviousHash:    g.lastHash,
 	}
 
-	// Build ISD proofs (in production these would come from CP-PKI)
+	if g.proofs == nil {
+		g.proofs = PlaceholderProofProvider{}
+	}
+
 	for _, hop := range path.Hops {
-		receipt.ISDProofs = append(receipt.ISDProofs, model.ISDProof{
-			IA:  hop.IA,
-			ISD: hop.ISD,
-		})
+		proof, err := g.proofs.BuildProof(hop)
+		if err != nil {
+			g.seqNo--
+			return nil, fmt.Errorf("building ISD proof for %s: %w", hop.IA, err)
+		}
+		receipt.ISDProofs = append(receipt.ISDProofs, proof)
 	}
 
 	// Sign the receipt

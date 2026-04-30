@@ -15,6 +15,7 @@ type Config struct {
 	DataDir        string
 	LogLevel       string // "debug", "info", "warn", "error"
 	OracleKeyPath  string
+	TRCDir         string // optional directory of signed TRCs for receipt ISD proofs
 	TLSCert        string // path to TLS certificate file (enables HTTPS)
 	TLSKey         string // path to TLS private key file
 	AllowInsecure  bool   // explicitly allow plaintext HTTP (JURISPATH_INSECURE=true)
@@ -36,6 +37,7 @@ func Load() *Config {
 		DataDir:        envOr("JURISPATH_DATA_DIR", "data/"),
 		LogLevel:       envOr("JURISPATH_LOG_LEVEL", "info"),
 		OracleKeyPath:  envOr("JURISPATH_ORACLE_KEY", "data/oracle.key"),
+		TRCDir:         os.Getenv("JURISPATH_TRC_DIR"),
 		TLSCert:        os.Getenv("JURISPATH_TLS_CERT"),
 		TLSKey:         os.Getenv("JURISPATH_TLS_KEY"),
 		AllowInsecure:  os.Getenv("JURISPATH_INSECURE") == "true",

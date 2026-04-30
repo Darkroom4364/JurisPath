@@ -10,7 +10,8 @@ func TestLoad_Defaults(t *testing.T) {
 	for _, k := range []string{
 		"JURISPATH_LISTEN", "JURISPATH_POLICY_DIR", "JURISPATH_DASHBOARD_DIR",
 		"JURISPATH_DATA_DIR", "JURISPATH_LOG_LEVEL", "JURISPATH_ORACLE_KEY",
-		"JURISPATH_API_TOKEN", "JURISPATH_ADMIN_TOKEN", "JURISPATH_UNAUTHENTICATED_API",
+		"JURISPATH_TRC_DIR", "JURISPATH_API_TOKEN", "JURISPATH_ADMIN_TOKEN",
+		"JURISPATH_UNAUTHENTICATED_API",
 	} {
 		t.Setenv(k, "")
 	}
@@ -33,6 +34,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if c.OracleKeyPath != "data/oracle.key" {
 		t.Errorf("OracleKeyPath = %q, want data/oracle.key", c.OracleKeyPath)
 	}
+	if c.TRCDir != "" {
+		t.Errorf("TRCDir = %q, want empty", c.TRCDir)
+	}
 	if c.APIToken != "" {
 		t.Errorf("APIToken = %q, want empty", c.APIToken)
 	}
@@ -46,6 +50,7 @@ func TestLoad_Defaults(t *testing.T) {
 
 func TestLoad_EnvOverride(t *testing.T) {
 	t.Setenv("JURISPATH_LISTEN", ":9090")
+	t.Setenv("JURISPATH_TRC_DIR", "/tmp/trcs")
 	t.Setenv("JURISPATH_API_TOKEN", "secret-token")
 	t.Setenv("JURISPATH_ADMIN_TOKEN", "admin-token")
 	t.Setenv("JURISPATH_UNAUTHENTICATED_API", "true")
@@ -55,6 +60,9 @@ func TestLoad_EnvOverride(t *testing.T) {
 	}
 	if c.APIToken != "secret-token" {
 		t.Errorf("APIToken = %q, want secret-token", c.APIToken)
+	}
+	if c.TRCDir != "/tmp/trcs" {
+		t.Errorf("TRCDir = %q, want /tmp/trcs", c.TRCDir)
 	}
 	if c.AdminToken != "admin-token" {
 		t.Errorf("AdminToken = %q, want admin-token", c.AdminToken)
