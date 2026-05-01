@@ -86,6 +86,8 @@ The `jurispath` binary also includes client commands for a running oracle:
 
 ```bash
 ./bin/jurispath health
+./bin/jurispath status
+./bin/jurispath policies
 ./bin/jurispath check --policy chf-eur-settlement-v1 --path 1-ff00:0:110,2-ff00:0:210
 ./bin/jurispath settle --from CH --to EU --amount 100 --currency CHF --policy chf-eur-settlement-v1 --path 1-ff00:0:110,2-ff00:0:210
 ./bin/jurispath filter-paths --policy chf-eur-settlement-v1 --paths '1-ff00:0:110,2-ff00:0:210;1-ff00:0:110,3-ff00:0:310'
@@ -95,6 +97,7 @@ The `jurispath` binary also includes client commands for a running oracle:
 
 Set `JURISPATH_CLI_BASE_URL` for non-default servers and
 `JURISPATH_CLI_API_TOKEN` or `JURISPATH_API_TOKEN` for authenticated APIs.
+Use `--output json` on list/status commands for script-friendly output.
 
 ### Run Demo Scenarios
 

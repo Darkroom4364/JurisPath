@@ -11,6 +11,7 @@ import (
 
 	"github.com/jurispath/jurispath/config"
 	"github.com/jurispath/jurispath/internal/api"
+	"github.com/jurispath/jurispath/internal/policy"
 	"github.com/jurispath/jurispath/internal/scion"
 	"github.com/jurispath/jurispath/pkg/model"
 )
@@ -101,8 +102,8 @@ func TestCLIHealthAddsBearerTokenAndPrintsJSON(t *testing.T) {
 	defer ts.Close()
 
 	var out bytes.Buffer
-	opts := &cliOptions{baseURL: ts.URL, token: "test-token", out: &out, err: io.Discard}
-	if err := opts.run([]string{"health"}); err != nil {
+	opts := &cliOptions{baseURL: ts.URL, token: "test-token", output: "json", out: &out, err: io.Discard}
+	if err := opts.run([]string{"health", "--output", "json"}); err != nil {
 		t.Fatalf("health command: %v", err)
 	}
 	if gotAuth != "Bearer test-token" {
@@ -110,6 +111,77 @@ func TestCLIHealthAddsBearerTokenAndPrintsJSON(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "audit_healthy") {
 		t.Fatalf("expected formatted JSON output, got %q", out.String())
+	}
+}
+
+func TestCLIStatusPrintsSummary(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/health":
+			json.NewEncoder(w).Encode(map[string]any{
+				"audit_healthy":  true,
+				"audit_failures": 0,
+				"receipt_count":  3,
+				"uptime_seconds": 12,
+			})
+		case "/api/policies":
+			json.NewEncoder(w).Encode([]policy.Policy{{ID: "p1", Mode: "strict", Version: 1}})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer ts.Close()
+
+	var out bytes.Buffer
+	opts := &cliOptions{baseURL: ts.URL, output: "table", out: &out, err: io.Discard}
+	if err := opts.run([]string{"status"}); err != nil {
+		t.Fatalf("status command: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "Policies:") || !strings.Contains(got, "Receipts:") {
+		t.Fatalf("expected status summary, got %q", got)
+	}
+}
+
+func TestCLIPoliciesTableOutput(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/policies" {
+			t.Fatalf("path = %q, want /api/policies", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]policy.Policy{
+			{ID: "chf-eur", Mode: "strict", Version: 2, AllowedISDs: []uint16{1, 2}},
+		})
+	}))
+	defer ts.Close()
+
+	var out bytes.Buffer
+	opts := &cliOptions{baseURL: ts.URL, output: "table", out: &out, err: io.Discard}
+	if err := opts.run([]string{"policies"}); err != nil {
+		t.Fatalf("policies command: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "ID") || !strings.Contains(got, "MODE") || !strings.Contains(got, "chf-eur") {
+		t.Fatalf("expected policies table, got %q", got)
+	}
+}
+
+func TestPrintUsageShowsOutputFlagForReadCommands(t *testing.T) {
+	var out bytes.Buffer
+	printUsage(&out)
+	got := out.String()
+	for _, want := range []string{
+		"jurispath status [--base-url URL] [--token TOKEN] [--output table|json]",
+		"jurispath health [--base-url URL] [--token TOKEN] [--output table|json]",
+		"jurispath policies [--base-url URL] [--token TOKEN] [--output table|json]",
+		"jurispath receipts [--base-url URL] [--token TOKEN] [--output table|json]",
+		"jurispath violations [--base-url URL] [--token TOKEN] [--output table|json]",
+		"jurispath verify-chain [--from-seq N] [--to-seq N] [--base-url URL] [--token TOKEN] [--output table|json]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("usage missing %q in:\n%s", want, got)
+		}
 	}
 }
 
