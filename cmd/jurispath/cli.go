@@ -12,9 +12,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/jurispath/jurispath/internal/api"
+	"github.com/jurispath/jurispath/internal/policy"
 	"github.com/jurispath/jurispath/internal/scion"
 	"github.com/jurispath/jurispath/pkg/model"
 )
@@ -25,6 +27,7 @@ type cliOptions struct {
 	baseURL     string
 	token       string
 	insecureTLS bool
+	output      string
 	out         io.Writer
 	err         io.Writer
 }
@@ -51,6 +54,7 @@ func defaultCLIOptions(out, err io.Writer) *cliOptions {
 		baseURL:     baseURL,
 		token:       token,
 		insecureTLS: os.Getenv("JURISPATH_CLI_INSECURE_TLS") == "true",
+		output:      "table",
 		out:         out,
 		err:         err,
 	}
@@ -68,23 +72,37 @@ func (opts *cliOptions) run(args []string) error {
 	fs.StringVar(&opts.baseURL, "base-url", opts.baseURL, "JurisPath server base URL")
 	fs.StringVar(&opts.token, "token", opts.token, "API bearer token")
 	fs.BoolVar(&opts.insecureTLS, "insecure-tls", opts.insecureTLS, "allow self-signed TLS certificates")
+	if opts.output == "" {
+		opts.output = "table"
+	}
+	fs.StringVar(&opts.output, "output", opts.output, "output format: table or json")
 
 	switch command {
+	case "status":
+		if err := opts.parseFlags(fs, args[1:]); err != nil {
+			return err
+		}
+		return opts.status()
 	case "health":
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := opts.parseFlags(fs, args[1:]); err != nil {
 			return err
 		}
-		return opts.getJSON("/api/health")
+		return opts.getHealth()
+	case "policies":
+		if err := opts.parseFlags(fs, args[1:]); err != nil {
+			return err
+		}
+		return opts.getPolicies()
 	case "receipts":
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := opts.parseFlags(fs, args[1:]); err != nil {
 			return err
 		}
-		return opts.getJSON("/api/receipts")
+		return opts.getReceipts()
 	case "violations":
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := opts.parseFlags(fs, args[1:]); err != nil {
 			return err
 		}
-		return opts.getJSON("/api/violations")
+		return opts.getViolations()
 	case "verify-chain":
 		return opts.verifyChain(fs, args[1:])
 	case "check":
@@ -94,7 +112,7 @@ func (opts *cliOptions) run(args []string) error {
 	case "filter-paths":
 		return opts.filterPaths(fs, args[1:])
 	case "demo":
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := opts.parseFlags(fs, args[1:]); err != nil {
 			return err
 		}
 		return opts.demo()
@@ -104,11 +122,21 @@ func (opts *cliOptions) run(args []string) error {
 	}
 }
 
+func (opts *cliOptions) parseFlags(fs *flag.FlagSet, args []string) error {
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if opts.output != "table" && opts.output != "json" {
+		return fmt.Errorf("--output must be table or json")
+	}
+	return nil
+}
+
 func (opts *cliOptions) verifyChain(fs *flag.FlagSet, args []string) error {
 	var fromSeq, toSeq uint64
 	fs.Uint64Var(&fromSeq, "from-seq", 0, "first receipt sequence to verify")
 	fs.Uint64Var(&toSeq, "to-seq", 0, "last receipt sequence to verify")
-	if err := fs.Parse(args); err != nil {
+	if err := opts.parseFlags(fs, args); err != nil {
 		return err
 	}
 	values := url.Values{}
@@ -122,7 +150,128 @@ func (opts *cliOptions) verifyChain(fs *flag.FlagSet, args []string) error {
 	if encoded := values.Encode(); encoded != "" {
 		path += "?" + encoded
 	}
-	return opts.getJSON(path)
+	return opts.getVerifyChain(path)
+}
+
+func (opts *cliOptions) status() error {
+	var health map[string]any
+	status, err := opts.getDecode("/api/health", &health)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("health returned HTTP %d", status)
+	}
+	var policies []policy.Policy
+	status, err = opts.getDecode("/api/policies", &policies)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("policies returned HTTP %d", status)
+	}
+	summary := map[string]any{
+		"base_url":       opts.baseURL,
+		"audit_healthy":  health["audit_healthy"],
+		"audit_failures": health["audit_failures"],
+		"receipt_count":  health["receipt_count"],
+		"uptime_seconds": health["uptime_seconds"],
+		"policy_count":   len(policies),
+	}
+	if opts.output == "json" {
+		return opts.printJSON(summary)
+	}
+	return opts.printStatus(summary)
+}
+
+func (opts *cliOptions) getHealth() error {
+	var result map[string]any
+	status, err := opts.getDecode("/api/health", &result)
+	if err != nil {
+		return err
+	}
+	if opts.output == "json" {
+		if err := opts.printJSON(result); err != nil {
+			return err
+		}
+	} else {
+		if err := opts.printStatus(result); err != nil {
+			return err
+		}
+	}
+	return opts.statusError(status)
+}
+
+func (opts *cliOptions) getPolicies() error {
+	var result []policy.Policy
+	status, err := opts.getDecode("/api/policies", &result)
+	if err != nil {
+		return err
+	}
+	if opts.output == "json" {
+		if err := opts.printJSON(result); err != nil {
+			return err
+		}
+	} else {
+		if err := opts.printPolicies(result); err != nil {
+			return err
+		}
+	}
+	return opts.statusError(status)
+}
+
+func (opts *cliOptions) getReceipts() error {
+	var result []model.ComplianceReceipt
+	status, err := opts.getDecode("/api/receipts", &result)
+	if err != nil {
+		return err
+	}
+	if opts.output == "json" {
+		if err := opts.printJSON(result); err != nil {
+			return err
+		}
+	} else {
+		if err := opts.printReceipts(result); err != nil {
+			return err
+		}
+	}
+	return opts.statusError(status)
+}
+
+func (opts *cliOptions) getViolations() error {
+	var result []model.Violation
+	status, err := opts.getDecode("/api/violations", &result)
+	if err != nil {
+		return err
+	}
+	if opts.output == "json" {
+		if err := opts.printJSON(result); err != nil {
+			return err
+		}
+	} else {
+		if err := opts.printViolations(result); err != nil {
+			return err
+		}
+	}
+	return opts.statusError(status)
+}
+
+func (opts *cliOptions) getVerifyChain(path string) error {
+	var result api.VerifyChainResponse
+	status, err := opts.getDecode(path, &result)
+	if err != nil {
+		return err
+	}
+	if opts.output == "json" {
+		if err := opts.printJSON(result); err != nil {
+			return err
+		}
+	} else {
+		if err := opts.printVerifyChain(result); err != nil {
+			return err
+		}
+	}
+	return opts.statusError(status)
 }
 
 func (opts *cliOptions) check(fs *flag.FlagSet, args []string) error {
@@ -130,7 +279,7 @@ func (opts *cliOptions) check(fs *flag.FlagSet, args []string) error {
 	fs.StringVar(&txID, "tx", "", "transaction ID")
 	fs.StringVar(&policyID, "policy", "", "policy ID")
 	fs.StringVar(&pathSpec, "path", "", "comma-separated IA path, e.g. 1-ff00:0:110,2-ff00:0:210")
-	if err := fs.Parse(args); err != nil {
+	if err := opts.parseFlags(fs, args); err != nil {
 		return err
 	}
 	if policyID == "" {
@@ -154,7 +303,7 @@ func (opts *cliOptions) settle(fs *flag.FlagSet, args []string) error {
 	fs.StringVar(&currency, "currency", "", "settlement currency")
 	fs.StringVar(&policyID, "policy", "", "policy ID")
 	fs.StringVar(&pathSpec, "path", "", "comma-separated IA path, e.g. 1-ff00:0:110,2-ff00:0:210")
-	if err := fs.Parse(args); err != nil {
+	if err := opts.parseFlags(fs, args); err != nil {
 		return err
 	}
 	if from == "" || to == "" || amount <= 0 || currency == "" || policyID == "" {
@@ -180,7 +329,7 @@ func (opts *cliOptions) filterPaths(fs *flag.FlagSet, args []string) error {
 	var policyID, pathSpecs string
 	fs.StringVar(&policyID, "policy", "", "policy ID")
 	fs.StringVar(&pathSpecs, "paths", "", "semicolon-separated candidate paths; each path is comma-separated IA hops")
-	if err := fs.Parse(args); err != nil {
+	if err := opts.parseFlags(fs, args); err != nil {
 		return err
 	}
 	if policyID == "" {
@@ -289,12 +438,20 @@ func (opts *cliOptions) demoFilterPaths(policyID, pathSpecs string) error {
 	return nil
 }
 
-func (opts *cliOptions) getJSON(path string) error {
+func (opts *cliOptions) getDecode(path string, result any) (int, error) {
 	req, err := opts.newRequest(http.MethodGet, path, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return opts.do(req)
+	resp, err := opts.httpClient().Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close() //nolint:errcheck // response body cleanup
+	if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+		return resp.StatusCode, fmt.Errorf("decode response: %w", err)
+	}
+	return resp.StatusCode, nil
 }
 
 func (opts *cliOptions) postJSON(path string, payload any) error {
@@ -373,6 +530,83 @@ func (opts *cliOptions) do(req *http.Request) error {
 	return nil
 }
 
+func (opts *cliOptions) statusError(status int) error {
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("server returned HTTP %d", status)
+	}
+	return nil
+}
+
+func (opts *cliOptions) printJSON(result any) error {
+	encoded, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Errorf("format response: %w", err)
+	}
+	fmt.Fprintln(opts.out, string(encoded))
+	return nil
+}
+
+func (opts *cliOptions) printStatus(values map[string]any) error {
+	fmt.Fprintf(opts.out, "Base URL:       %v\n", valueOr(values, "base_url", opts.baseURL))
+	fmt.Fprintf(opts.out, "Audit healthy:  %v\n", values["audit_healthy"])
+	fmt.Fprintf(opts.out, "Audit failures: %v\n", values["audit_failures"])
+	fmt.Fprintf(opts.out, "Receipts:       %v\n", values["receipt_count"])
+	if _, ok := values["policy_count"]; ok {
+		fmt.Fprintf(opts.out, "Policies:       %v\n", values["policy_count"])
+	}
+	fmt.Fprintf(opts.out, "Uptime:         %vs\n", values["uptime_seconds"])
+	return nil
+}
+
+func (opts *cliOptions) printPolicies(policies []policy.Policy) error {
+	w := tabwriter.NewWriter(opts.out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tMODE\tVERSION\tALLOWED_ISDS")
+	for _, p := range policies {
+		fmt.Fprintf(w, "%s\t%s\t%d\t%v\n", p.ID, p.Mode, p.Version, p.AllowedISDs)
+	}
+	return w.Flush()
+}
+
+func (opts *cliOptions) printReceipts(receipts []model.ComplianceReceipt) error {
+	w := tabwriter.NewWriter(opts.out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "SEQ\tID\tTX\tPOLICY\tHOPS")
+	for _, r := range receipts {
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d\n", r.SeqNo, r.ID, r.TransactionID, r.PolicyID, len(r.Path.Hops))
+	}
+	return w.Flush()
+}
+
+func (opts *cliOptions) printViolations(violations []model.Violation) error {
+	w := tabwriter.NewWriter(opts.out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TIME\tTX\tPOLICY\tSEVERITY\tOFFENDING_HOPS")
+	for _, v := range violations {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\n", v.Timestamp.Format(time.RFC3339), v.TransactionID, v.PolicyID, v.Severity, len(v.OffendingHops))
+	}
+	return w.Flush()
+}
+
+func (opts *cliOptions) printVerifyChain(chain api.VerifyChainResponse) error {
+	if _, err := fmt.Fprintf(opts.out, "Chain length: %d\n", chain.ChainLength); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(opts.out, "Oracle keys:  %d\n", len(chain.OraclePublicKeys)); err != nil {
+		return err
+	}
+	w := tabwriter.NewWriter(opts.out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "SEQ\tID\tTX\tPOLICY")
+	for _, r := range chain.Receipts {
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\n", r.SeqNo, r.ID, r.TransactionID, r.PolicyID)
+	}
+	return w.Flush()
+}
+
+func valueOr(values map[string]any, key string, fallback any) any {
+	if value, ok := values[key]; ok {
+		return value
+	}
+	return fallback
+}
+
 func (opts *cliOptions) httpClient() *http.Client {
 	if !opts.insecureTLS {
 		return &http.Client{Timeout: 30 * time.Second}
@@ -449,10 +683,12 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
   jurispath serve
   jurispath demo [--base-url URL] [--token TOKEN]
-  jurispath health [--base-url URL] [--token TOKEN]
-  jurispath receipts [--base-url URL] [--token TOKEN]
-  jurispath violations [--base-url URL] [--token TOKEN]
-  jurispath verify-chain [--from-seq N] [--to-seq N] [--base-url URL] [--token TOKEN]
+  jurispath status [--base-url URL] [--token TOKEN] [--output table|json]
+  jurispath health [--base-url URL] [--token TOKEN] [--output table|json]
+  jurispath policies [--base-url URL] [--token TOKEN] [--output table|json]
+  jurispath receipts [--base-url URL] [--token TOKEN] [--output table|json]
+  jurispath violations [--base-url URL] [--token TOKEN] [--output table|json]
+  jurispath verify-chain [--from-seq N] [--to-seq N] [--base-url URL] [--token TOKEN] [--output table|json]
   jurispath check --policy POLICY --path IA[,IA...] [--tx TX] [--base-url URL] [--token TOKEN]
   jurispath settle --from FROM --to TO --amount N --currency CUR --policy POLICY --path IA[,IA...] [--tx TX] [--base-url URL] [--token TOKEN]
   jurispath filter-paths --policy POLICY --paths 'IA[,IA...];IA[,IA...]' [--base-url URL] [--token TOKEN]
