@@ -185,6 +185,31 @@ func TestPrintUsageShowsOutputFlagForReadCommands(t *testing.T) {
 	}
 }
 
+func TestCLIHelpListsPolishedCommands(t *testing.T) {
+	var out bytes.Buffer
+	opts := defaultCLIOptions(&out, io.Discard)
+	if err := opts.run([]string{"--help"}); err != nil {
+		t.Fatalf("help command: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{"Available Commands:", "completion", "settle", "verify-chain"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("help missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestCLICompletionGeneratesShellScript(t *testing.T) {
+	var out bytes.Buffer
+	opts := defaultCLIOptions(&out, io.Discard)
+	if err := opts.run([]string{"completion", "zsh"}); err != nil {
+		t.Fatalf("completion command: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "compdef _jurispath jurispath") {
+		t.Fatalf("expected zsh completion script, got:\n%s", got)
+	}
+}
+
 func TestCLISettlePostsRequest(t *testing.T) {
 	var got api.SettleRequest
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
