@@ -85,6 +85,8 @@ The server starts on `:8080` by default.
 The `jurispath` binary also includes client commands for a running oracle:
 
 ```bash
+./bin/jurispath --help
+./bin/jurispath settle --help
 ./bin/jurispath health
 ./bin/jurispath status
 ./bin/jurispath policies
@@ -97,7 +99,8 @@ The `jurispath` binary also includes client commands for a running oracle:
 
 Set `JURISPATH_CLI_BASE_URL` for non-default servers and
 `JURISPATH_CLI_API_TOKEN` or `JURISPATH_API_TOKEN` for authenticated APIs.
-Use `--output json` on list/status commands for script-friendly output.
+Use `--output json` or `-o json` on list/status commands for script-friendly output.
+Generate shell completion with `./bin/jurispath completion bash|zsh|fish`.
 
 ### Run Demo Scenarios
 

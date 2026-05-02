@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +18,7 @@ import (
 	"github.com/jurispath/jurispath/internal/policy"
 	"github.com/jurispath/jurispath/internal/scion"
 	"github.com/jurispath/jurispath/pkg/model"
+	"github.com/spf13/cobra"
 )
 
 const defaultCLIBaseURL = "http://localhost:8080"
@@ -61,96 +61,168 @@ func defaultCLIOptions(out, err io.Writer) *cliOptions {
 }
 
 func (opts *cliOptions) run(args []string) error {
-	if len(args) == 0 {
-		printUsage(opts.err)
-		return fmt.Errorf("missing command")
-	}
+	cmd := opts.newRootCmd()
+	cmd.SetArgs(args)
+	cmd.SetOut(opts.out)
+	cmd.SetErr(opts.err)
+	return cmd.Execute()
+}
 
-	command := args[0]
-	fs := flag.NewFlagSet(command, flag.ContinueOnError)
-	fs.SetOutput(opts.err)
-	fs.StringVar(&opts.baseURL, "base-url", opts.baseURL, "JurisPath server base URL")
-	fs.StringVar(&opts.token, "token", opts.token, "API bearer token")
-	fs.BoolVar(&opts.insecureTLS, "insecure-tls", opts.insecureTLS, "allow self-signed TLS certificates")
+func (opts *cliOptions) newRootCmd() *cobra.Command {
 	if opts.output == "" {
 		opts.output = "table"
 	}
-	fs.StringVar(&opts.output, "output", opts.output, "output format: table or json")
 
-	switch command {
-	case "status":
-		if err := opts.parseFlags(fs, args[1:]); err != nil {
-			return err
+	root := &cobra.Command{
+		Use:           "jurispath",
+		Short:         "Jurisdiction-aware settlement compliance CLI",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := cmd.Help(); err != nil {
+				return err
+			}
+			return fmt.Errorf("missing command")
+		},
+	}
+
+	root.PersistentFlags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "JurisPath server base URL")
+	root.PersistentFlags().StringVar(&opts.token, "token", opts.token, "API bearer token")
+	root.PersistentFlags().BoolVar(&opts.insecureTLS, "insecure-tls", opts.insecureTLS, "allow self-signed TLS certificates")
+	root.PersistentFlags().StringVarP(&opts.output, "output", "o", opts.output, "output format: table or json")
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if opts.output != "table" && opts.output != "json" {
+			return fmt.Errorf("--output must be table or json")
 		}
-		return opts.status()
-	case "health":
-		if err := opts.parseFlags(fs, args[1:]); err != nil {
-			return err
-		}
-		return opts.getHealth()
-	case "policies":
-		if err := opts.parseFlags(fs, args[1:]); err != nil {
-			return err
-		}
-		return opts.getPolicies()
-	case "receipts":
-		if err := opts.parseFlags(fs, args[1:]); err != nil {
-			return err
-		}
-		return opts.getReceipts()
-	case "violations":
-		if err := opts.parseFlags(fs, args[1:]); err != nil {
-			return err
-		}
-		return opts.getViolations()
-	case "verify-chain":
-		return opts.verifyChain(fs, args[1:])
-	case "check":
-		return opts.check(fs, args[1:])
-	case "settle":
-		return opts.settle(fs, args[1:])
-	case "filter-paths":
-		return opts.filterPaths(fs, args[1:])
-	case "demo":
-		if err := opts.parseFlags(fs, args[1:]); err != nil {
-			return err
-		}
-		return opts.demo()
-	default:
-		printUsage(opts.err)
-		return fmt.Errorf("unknown command %q", command)
+		return nil
+	}
+
+	root.AddCommand(opts.newStatusCmd())
+	root.AddCommand(opts.newHealthCmd())
+	root.AddCommand(opts.newPoliciesCmd())
+	root.AddCommand(opts.newReceiptsCmd())
+	root.AddCommand(opts.newViolationsCmd())
+	root.AddCommand(opts.newVerifyChainCmd())
+	root.AddCommand(opts.newCheckCmd())
+	root.AddCommand(opts.newSettleCmd())
+	root.AddCommand(opts.newFilterPathsCmd())
+	root.AddCommand(opts.newDemoCmd())
+	root.AddCommand(opts.newCompletionCmd())
+	return root
+}
+
+func (opts *cliOptions) newStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show server health and policy summary",
+		Args:  cobra.NoArgs,
+		Example: `  jurispath status
+  jurispath status --output json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return opts.status()
+		},
 	}
 }
 
-func (opts *cliOptions) parseFlags(fs *flag.FlagSet, args []string) error {
-	if err := fs.Parse(args); err != nil {
-		return err
+func (opts *cliOptions) newHealthCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "health",
+		Short:   "Show health details from the JurisPath server",
+		Args:    cobra.NoArgs,
+		Example: `  jurispath health -o json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return opts.getHealth()
+		},
 	}
-	if opts.output != "table" && opts.output != "json" {
-		return fmt.Errorf("--output must be table or json")
-	}
-	return nil
 }
 
-func (opts *cliOptions) verifyChain(fs *flag.FlagSet, args []string) error {
+func (opts *cliOptions) newPoliciesCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "policies",
+		Short:   "List loaded compliance policies",
+		Args:    cobra.NoArgs,
+		Example: `  jurispath policies`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return opts.getPolicies()
+		},
+	}
+}
+
+func (opts *cliOptions) newReceiptsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "receipts",
+		Short:   "List compliance receipts",
+		Args:    cobra.NoArgs,
+		Example: `  jurispath receipts -o json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return opts.getReceipts()
+		},
+	}
+}
+
+func (opts *cliOptions) newViolationsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "violations",
+		Short:   "List compliance violations",
+		Args:    cobra.NoArgs,
+		Example: `  jurispath violations`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return opts.getViolations()
+		},
+	}
+}
+
+func (opts *cliOptions) newVerifyChainCmd() *cobra.Command {
 	var fromSeq, toSeq uint64
-	fs.Uint64Var(&fromSeq, "from-seq", 0, "first receipt sequence to verify")
-	fs.Uint64Var(&toSeq, "to-seq", 0, "last receipt sequence to verify")
-	if err := opts.parseFlags(fs, args); err != nil {
-		return err
+	cmd := &cobra.Command{
+		Use:   "verify-chain",
+		Short: "Verify the receipt hash chain",
+		Args:  cobra.NoArgs,
+		Example: `  jurispath verify-chain
+  jurispath verify-chain --from-seq 10 --to-seq 25 -o json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			values := url.Values{}
+			if fromSeq > 0 {
+				values.Set("from_seq", strconv.FormatUint(fromSeq, 10))
+			}
+			if toSeq > 0 {
+				values.Set("to_seq", strconv.FormatUint(toSeq, 10))
+			}
+			path := "/api/verify-chain"
+			if encoded := values.Encode(); encoded != "" {
+				path += "?" + encoded
+			}
+			return opts.getVerifyChain(path)
+		},
 	}
-	values := url.Values{}
-	if fromSeq > 0 {
-		values.Set("from_seq", strconv.FormatUint(fromSeq, 10))
+	cmd.Flags().Uint64Var(&fromSeq, "from-seq", 0, "first receipt sequence to verify")
+	cmd.Flags().Uint64Var(&toSeq, "to-seq", 0, "last receipt sequence to verify")
+	return cmd
+}
+
+func (opts *cliOptions) newCheckCmd() *cobra.Command {
+	var txID, policyID, pathSpec string
+	cmd := &cobra.Command{
+		Use:   "check",
+		Short: "Check whether a path complies with a policy",
+		Args:  cobra.NoArgs,
+		Example: `  jurispath check --policy eu-only --path "1-ff00:0:110,2-ff00:0:210"
+  jurispath check --tx tx-123 --policy eu-only --path "1-ff00:0:110,2-ff00:0:210"`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rawPath, err := rawPathFromSpec(pathSpec)
+			if err != nil {
+				return err
+			}
+			req := api.CheckRequest{TransactionID: txID, PolicyID: policyID, RawPath: rawPath}
+			return opts.postJSON("/api/check", req)
+		},
 	}
-	if toSeq > 0 {
-		values.Set("to_seq", strconv.FormatUint(toSeq, 10))
-	}
-	path := "/api/verify-chain"
-	if encoded := values.Encode(); encoded != "" {
-		path += "?" + encoded
-	}
-	return opts.getVerifyChain(path)
+	cmd.Flags().StringVar(&txID, "tx", "", "transaction ID")
+	cmd.Flags().StringVar(&policyID, "policy", "", "policy ID")
+	cmd.Flags().StringVar(&pathSpec, "path", "", "comma-separated IA path, e.g. 1-ff00:0:110,2-ff00:0:210")
+	_ = cmd.MarkFlagRequired("policy")
+	_ = cmd.MarkFlagRequired("path")
+	return cmd
 }
 
 func (opts *cliOptions) status() error {
@@ -274,73 +346,104 @@ func (opts *cliOptions) getVerifyChain(path string) error {
 	return opts.statusError(status)
 }
 
-func (opts *cliOptions) check(fs *flag.FlagSet, args []string) error {
-	var txID, policyID, pathSpec string
-	fs.StringVar(&txID, "tx", "", "transaction ID")
-	fs.StringVar(&policyID, "policy", "", "policy ID")
-	fs.StringVar(&pathSpec, "path", "", "comma-separated IA path, e.g. 1-ff00:0:110,2-ff00:0:210")
-	if err := opts.parseFlags(fs, args); err != nil {
-		return err
-	}
-	if policyID == "" {
-		return fmt.Errorf("--policy is required")
-	}
-	rawPath, err := rawPathFromSpec(pathSpec)
-	if err != nil {
-		return err
-	}
-	req := api.CheckRequest{TransactionID: txID, PolicyID: policyID, RawPath: rawPath}
-	return opts.postJSON("/api/check", req)
-}
-
-func (opts *cliOptions) settle(fs *flag.FlagSet, args []string) error {
+func (opts *cliOptions) newSettleCmd() *cobra.Command {
 	var txID, from, to, currency, policyID, pathSpec string
 	var amount int64
-	fs.StringVar(&txID, "tx", "", "transaction ID")
-	fs.StringVar(&from, "from", "", "source validator/account")
-	fs.StringVar(&to, "to", "", "destination validator/account")
-	fs.Int64Var(&amount, "amount", 0, "settlement amount")
-	fs.StringVar(&currency, "currency", "", "settlement currency")
-	fs.StringVar(&policyID, "policy", "", "policy ID")
-	fs.StringVar(&pathSpec, "path", "", "comma-separated IA path, e.g. 1-ff00:0:110,2-ff00:0:210")
-	if err := opts.parseFlags(fs, args); err != nil {
-		return err
+	cmd := &cobra.Command{
+		Use:   "settle",
+		Short: "Submit a settlement request and print the signed response",
+		Args:  cobra.NoArgs,
+		Example: `  jurispath settle --from CH --to EU --amount 100 --currency CHF --policy chf-eur-settlement-v1 --path "1-ff00:0:110,2-ff00:0:210"
+  jurispath settle --tx tx-123 --from alice --to bob --amount 50 --currency CHF --policy swiss-dlt-act-v1 --path "1-ff00:0:110,1-ff00:0:111"`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if amount <= 0 {
+				return fmt.Errorf("--amount must be greater than 0")
+			}
+			rawPath, err := rawPathFromSpec(pathSpec)
+			if err != nil {
+				return err
+			}
+			req := api.SettleRequest{
+				TransactionID: txID,
+				From:          from,
+				To:            to,
+				Amount:        amount,
+				Currency:      currency,
+				PolicyID:      policyID,
+				RawPath:       rawPath,
+			}
+			return opts.postJSON("/api/settle", req)
+		},
 	}
-	if from == "" || to == "" || amount <= 0 || currency == "" || policyID == "" {
-		return fmt.Errorf("--from, --to, --amount, --currency, and --policy are required")
-	}
-	rawPath, err := rawPathFromSpec(pathSpec)
-	if err != nil {
-		return err
-	}
-	req := api.SettleRequest{
-		TransactionID: txID,
-		From:          from,
-		To:            to,
-		Amount:        amount,
-		Currency:      currency,
-		PolicyID:      policyID,
-		RawPath:       rawPath,
-	}
-	return opts.postJSON("/api/settle", req)
+	cmd.Flags().StringVar(&txID, "tx", "", "transaction ID")
+	cmd.Flags().StringVar(&from, "from", "", "source validator/account")
+	cmd.Flags().StringVar(&to, "to", "", "destination validator/account")
+	cmd.Flags().Int64Var(&amount, "amount", 0, "settlement amount")
+	cmd.Flags().StringVar(&currency, "currency", "", "settlement currency")
+	cmd.Flags().StringVar(&policyID, "policy", "", "policy ID")
+	cmd.Flags().StringVar(&pathSpec, "path", "", "comma-separated IA path, e.g. 1-ff00:0:110,2-ff00:0:210")
+	_ = cmd.MarkFlagRequired("from")
+	_ = cmd.MarkFlagRequired("to")
+	_ = cmd.MarkFlagRequired("amount")
+	_ = cmd.MarkFlagRequired("currency")
+	_ = cmd.MarkFlagRequired("policy")
+	_ = cmd.MarkFlagRequired("path")
+	return cmd
 }
 
-func (opts *cliOptions) filterPaths(fs *flag.FlagSet, args []string) error {
+func (opts *cliOptions) newFilterPathsCmd() *cobra.Command {
 	var policyID, pathSpecs string
-	fs.StringVar(&policyID, "policy", "", "policy ID")
-	fs.StringVar(&pathSpecs, "paths", "", "semicolon-separated candidate paths; each path is comma-separated IA hops")
-	if err := opts.parseFlags(fs, args); err != nil {
-		return err
+	cmd := &cobra.Command{
+		Use:     "filter-paths",
+		Short:   "Filter candidate SCION paths by policy compliance",
+		Args:    cobra.NoArgs,
+		Example: `  jurispath filter-paths --policy chf-eur-settlement-v1 --paths "1-ff00:0:110,2-ff00:0:210;1-ff00:0:110,3-ff00:0:310"`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			paths, err := pathsFromSpecs(pathSpecs)
+			if err != nil {
+				return err
+			}
+			req := api.FilterPathsRequest{PolicyID: policyID, Paths: paths}
+			return opts.postJSON("/api/filter-paths", req)
+		},
 	}
-	if policyID == "" {
-		return fmt.Errorf("--policy is required")
+	cmd.Flags().StringVar(&policyID, "policy", "", "policy ID")
+	cmd.Flags().StringVar(&pathSpecs, "paths", "", "semicolon-separated candidate paths; each path is comma-separated IA hops")
+	_ = cmd.MarkFlagRequired("policy")
+	_ = cmd.MarkFlagRequired("paths")
+	return cmd
+}
+
+func (opts *cliOptions) newDemoCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "demo",
+		Short: "Run the built-in settlement demo scenarios",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return opts.demo()
+		},
 	}
-	paths, err := pathsFromSpecs(pathSpecs)
-	if err != nil {
-		return err
+}
+
+func (opts *cliOptions) newCompletionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:       "completion [bash|zsh|fish]",
+		Short:     "Generate a shell completion script",
+		Args:      cobra.ExactArgs(1),
+		ValidArgs: []string{"bash", "zsh", "fish"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch args[0] {
+			case "bash":
+				return cmd.Root().GenBashCompletion(opts.out)
+			case "zsh":
+				return cmd.Root().GenZshCompletion(opts.out)
+			case "fish":
+				return cmd.Root().GenFishCompletion(opts.out, true)
+			default:
+				return fmt.Errorf("unsupported shell: %s", args[0])
+			}
+		},
 	}
-	req := api.FilterPathsRequest{PolicyID: policyID, Paths: paths}
-	return opts.postJSON("/api/filter-paths", req)
 }
 
 func (opts *cliOptions) demo() error {
@@ -692,6 +795,7 @@ func printUsage(w io.Writer) {
   jurispath check --policy POLICY --path IA[,IA...] [--tx TX] [--base-url URL] [--token TOKEN]
   jurispath settle --from FROM --to TO --amount N --currency CUR --policy POLICY --path IA[,IA...] [--tx TX] [--base-url URL] [--token TOKEN]
   jurispath filter-paths --policy POLICY --paths 'IA[,IA...];IA[,IA...]' [--base-url URL] [--token TOKEN]
+  jurispath completion [bash|zsh|fish]
 
 Environment:
   JURISPATH_CLI_BASE_URL       server base URL (default http://localhost:8080)
