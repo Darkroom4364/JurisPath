@@ -86,6 +86,7 @@ The `jurispath` binary also includes client commands for a running oracle:
 
 ```bash
 ./bin/jurispath --help
+./bin/jurispath serve
 ./bin/jurispath settle --help
 ./bin/jurispath health
 ./bin/jurispath status
@@ -186,6 +187,8 @@ policies/          Jurisdiction policy YAML files
 | `JURISPATH_LISTEN` | `:8080` | Server listen address |
 | `JURISPATH_POLICY_DIR` | `policies` | Path to jurisdiction policy YAML files |
 | `JURISPATH_DASHBOARD_DIR` | `dashboard` | Path to dashboard static files |
+| `JURISPATH_DATA_DIR` | `data/` | Directory for BoltDB receipt, violation, and audit stores |
+| `JURISPATH_LOG_LEVEL` | `info` | Structured log level: `debug`, `info`, `warn`, or `error` |
 | `JURISPATH_ORACLE_KEY` | `data/oracle.key` | Active oracle signing key path. `/api/rotate-key` archives this file before installing a new key. |
 | `JURISPATH_TRC_DIR` | *(empty)* | Optional directory of signed `.trc` files used to populate verified receipt ISD proof material. Empty uses explicit placeholder proofs for local/demo mode. |
 | `JURISPATH_THRESHOLD_K` | *(empty)* | Optional receipt threshold-signing quorum. Must be set with `JURISPATH_THRESHOLD_N`. |
@@ -196,6 +199,10 @@ policies/          Jurisdiction policy YAML files
 | `JURISPATH_API_TOKEN` | *(empty)* | Bearer token required for `/api/*` endpoints. |
 | `JURISPATH_ADMIN_TOKEN` | *(empty)* | Privileged token required in `X-JurisPath-Admin-Token` for `/api/rotate-key`. |
 | `JURISPATH_UNAUTHENTICATED_API` | `false` | Explicitly allow unauthenticated API access for local demo/dev mode. |
+| `JURISPATH_VALIDATORS` | `validators.yaml` | Path to validator topology and balance configuration |
+| `JURISPATH_SCION_MODE` | `false` | Enable experimental SCION-mode startup and transport wiring. The current API settlement path remains demo-oriented; API-supplied `raw_path` is rejected until authenticated path evidence and real validator/session flow are wired. |
+| `JURISPATH_SCION_DAEMON` | `127.0.0.1:30255` | SCION daemon address used in SCION mode |
+| `JURISPATH_VALIDATOR_ID` | *(empty)* | Local validator ID, required when `JURISPATH_SCION_MODE=true` |
 | `JURISPATH_CLI_BASE_URL` | `http://localhost:8080` | Base URL used by `cmd/jurispath` client commands. |
 | `JURISPATH_CLI_API_TOKEN` | *(empty)* | Bearer token used by `cmd/jurispath` client commands; falls back to `JURISPATH_API_TOKEN`. |
 | `JURISPATH_CLI_INSECURE_TLS` | `false` | Allow `cmd/jurispath` client commands to connect to local self-signed TLS certs. |

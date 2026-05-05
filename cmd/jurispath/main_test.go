@@ -57,6 +57,39 @@ func TestRunWithArgsServeRejectsExtraArgs(t *testing.T) {
 	}
 }
 
+func TestCLIServeRunsServerRunner(t *testing.T) {
+	called := false
+	opts := &cliOptions{
+		output: "table",
+		out:    io.Discard,
+		err:    io.Discard,
+		server: func() int {
+			called = true
+			return 0
+		},
+	}
+	if err := opts.run([]string{"serve"}); err != nil {
+		t.Fatalf("serve command: %v", err)
+	}
+	if !called {
+		t.Fatal("serve command did not run server")
+	}
+}
+
+func TestCLIServeHelp(t *testing.T) {
+	var out bytes.Buffer
+	opts := defaultCLIOptions(&out, io.Discard)
+	if err := opts.run([]string{"serve", "--help"}); err != nil {
+		t.Fatalf("serve help: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{"Run the JurisPath API server", "jurispath serve"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("serve help missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 func TestDefaultCLIOptionsDoNotInheritDemoEnv(t *testing.T) {
 	t.Setenv("JURISPATH_CLI_BASE_URL", "")
 	t.Setenv("JURISPATH_CLI_INSECURE_TLS", "")
@@ -167,20 +200,16 @@ func TestCLIPoliciesTableOutput(t *testing.T) {
 	}
 }
 
-func TestPrintUsageShowsOutputFlagForReadCommands(t *testing.T) {
-	var out bytes.Buffer
-	printUsage(&out)
-	got := out.String()
-	for _, want := range []string{
-		"jurispath status [--base-url URL] [--token TOKEN] [--output table|json]",
-		"jurispath health [--base-url URL] [--token TOKEN] [--output table|json]",
-		"jurispath policies [--base-url URL] [--token TOKEN] [--output table|json]",
-		"jurispath receipts [--base-url URL] [--token TOKEN] [--output table|json]",
-		"jurispath violations [--base-url URL] [--token TOKEN] [--output table|json]",
-		"jurispath verify-chain [--from-seq N] [--to-seq N] [--base-url URL] [--token TOKEN] [--output table|json]",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("usage missing %q in:\n%s", want, got)
+func TestCLIReadCommandHelpShowsOutputFlag(t *testing.T) {
+	for _, command := range []string{"status", "health", "policies", "receipts", "violations", "verify-chain"} {
+		var out bytes.Buffer
+		opts := defaultCLIOptions(&out, io.Discard)
+		if err := opts.run([]string{command, "--help"}); err != nil {
+			t.Fatalf("%s help: %v", command, err)
+		}
+		got := out.String()
+		if !strings.Contains(got, "--output") || !strings.Contains(got, "table or json") {
+			t.Fatalf("%s help missing output flag in:\n%s", command, got)
 		}
 	}
 }
@@ -192,7 +221,7 @@ func TestCLIHelpListsPolishedCommands(t *testing.T) {
 		t.Fatalf("help command: %v", err)
 	}
 	got := out.String()
-	for _, want := range []string{"Available Commands:", "completion", "settle", "verify-chain"} {
+	for _, want := range []string{"Available Commands:", "completion", "serve", "settle", "verify-chain"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("help missing %q in:\n%s", want, got)
 		}

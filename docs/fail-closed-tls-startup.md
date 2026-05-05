@@ -34,10 +34,10 @@ In another terminal, run:
 make demo-tls
 ```
 
-`make demo-tls` sets `JURISPATH_DEMO_INSECURE_TLS=true` so the demo client can
-connect to the local self-signed certificate. If the server has API auth enabled,
-set `JURISPATH_DEMO_API_TOKEN` or reuse `JURISPATH_API_TOKEN` for the demo
-client. Do not use insecure TLS outside local development.
+`make demo-tls` sets `JURISPATH_CLI_INSECURE_TLS=true` so the CLI demo command
+can connect to the local self-signed certificate. If the server has API auth
+enabled, set `JURISPATH_CLI_API_TOKEN` or reuse `JURISPATH_API_TOKEN` for the
+CLI. Do not use insecure TLS outside local development.
 
 ## Docker Compose
 
@@ -70,5 +70,5 @@ not configured. Compose mounts `${JURISPATH_CERTS_DIR:-./certs}` to `/certs`.
 
 ```bash
 make docs-check-tls
-go test ./cmd/demo ./config ./internal/api
+go test ./cmd/jurispath ./cmd/demo ./config ./internal/api
 ```
