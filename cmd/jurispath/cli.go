@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,15 +31,39 @@ type cliOptions struct {
 	output      string
 	out         io.Writer
 	err         io.Writer
+	server      func() int
 }
 
-func runClientCommand(args []string) int {
+type commandExitError struct {
+	code int
+}
+
+func (e *commandExitError) Error() string {
+	return fmt.Sprintf("command exited with code %d", e.code)
+}
+
+func runCLICommand(args []string) int {
 	opts := defaultCLIOptions(os.Stdout, os.Stderr)
 	if err := opts.run(args); err != nil {
+		var exitErr *commandExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.code
+		}
 		fmt.Fprintln(opts.err, "error:", err)
+		if isUsageError(err) {
+			return 2
+		}
 		return 1
 	}
 	return 0
+}
+
+func isUsageError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "unknown command") ||
+		strings.Contains(msg, "accepts ") ||
+		strings.Contains(msg, "required flag") ||
+		strings.Contains(msg, "unknown flag")
 }
 
 func defaultCLIOptions(out, err io.Writer) *cliOptions {
@@ -57,6 +82,7 @@ func defaultCLIOptions(out, err io.Writer) *cliOptions {
 		output:      "table",
 		out:         out,
 		err:         err,
+		server:      runServer,
 	}
 }
 
@@ -75,7 +101,7 @@ func (opts *cliOptions) newRootCmd() *cobra.Command {
 
 	root := &cobra.Command{
 		Use:           "jurispath",
-		Short:         "Jurisdiction-aware settlement compliance CLI",
+		Short:         "JurisPath compliance oracle server and CLI",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -97,6 +123,7 @@ func (opts *cliOptions) newRootCmd() *cobra.Command {
 		return nil
 	}
 
+	root.AddCommand(opts.newServeCmd())
 	root.AddCommand(opts.newStatusCmd())
 	root.AddCommand(opts.newHealthCmd())
 	root.AddCommand(opts.newPoliciesCmd())
@@ -109,6 +136,26 @@ func (opts *cliOptions) newRootCmd() *cobra.Command {
 	root.AddCommand(opts.newDemoCmd())
 	root.AddCommand(opts.newCompletionCmd())
 	return root
+}
+
+func (opts *cliOptions) newServeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "serve",
+		Short: "Run the JurisPath API server and dashboard",
+		Args:  cobra.NoArgs,
+		Example: `  jurispath serve
+  JURISPATH_INSECURE=true JURISPATH_UNAUTHENTICATED_API=true jurispath serve
+  JURISPATH_TLS_CERT=deploy/certs/cert.pem JURISPATH_TLS_KEY=deploy/certs/key.pem JURISPATH_API_TOKEN=dev-token jurispath serve`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if opts.server == nil {
+				opts.server = runServer
+			}
+			if code := opts.server(); code != 0 {
+				return &commandExitError{code: code}
+			}
+			return nil
+		},
+	}
 }
 
 func (opts *cliOptions) newStatusCmd() *cobra.Command {
@@ -780,25 +827,4 @@ func pathsFromSpecs(specs string) ([]model.SCIONPath, error) {
 		return nil, fmt.Errorf("--paths is required")
 	}
 	return paths, nil
-}
-
-func printUsage(w io.Writer) {
-	fmt.Fprintln(w, `Usage:
-  jurispath serve
-  jurispath demo [--base-url URL] [--token TOKEN]
-  jurispath status [--base-url URL] [--token TOKEN] [--output table|json]
-  jurispath health [--base-url URL] [--token TOKEN] [--output table|json]
-  jurispath policies [--base-url URL] [--token TOKEN] [--output table|json]
-  jurispath receipts [--base-url URL] [--token TOKEN] [--output table|json]
-  jurispath violations [--base-url URL] [--token TOKEN] [--output table|json]
-  jurispath verify-chain [--from-seq N] [--to-seq N] [--base-url URL] [--token TOKEN] [--output table|json]
-  jurispath check --policy POLICY --path IA[,IA...] [--tx TX] [--base-url URL] [--token TOKEN]
-  jurispath settle --from FROM --to TO --amount N --currency CUR --policy POLICY --path IA[,IA...] [--tx TX] [--base-url URL] [--token TOKEN]
-  jurispath filter-paths --policy POLICY --paths 'IA[,IA...];IA[,IA...]' [--base-url URL] [--token TOKEN]
-  jurispath completion [bash|zsh|fish]
-
-Environment:
-  JURISPATH_CLI_BASE_URL       server base URL (default http://localhost:8080)
-  JURISPATH_CLI_API_TOKEN      bearer token, falls back to JURISPATH_API_TOKEN
-  JURISPATH_CLI_INSECURE_TLS   set true for local self-signed HTTPS`)
 }

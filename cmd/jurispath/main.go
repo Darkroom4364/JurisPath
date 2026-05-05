@@ -37,22 +37,7 @@ func runWithArgs(args []string) int {
 	if len(args) == 0 {
 		return runServer()
 	}
-	if args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
-		return runClientCommand(args)
-	}
-	switch args[0] {
-	case "serve":
-		if len(args) != 1 {
-			printUsage(os.Stderr)
-			return 2
-		}
-		return runServer()
-	case "status", "health", "policies", "receipts", "violations", "verify-chain", "check", "settle", "filter-paths", "demo", "completion":
-		return runClientCommand(args)
-	default:
-		printUsage(os.Stderr)
-		return 2
-	}
+	return runCLICommand(args)
 }
 
 func runServer() int {
