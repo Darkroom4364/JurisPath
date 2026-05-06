@@ -30,7 +30,7 @@ The oracle sits between DLT validators and the SCION network layer. It inspects 
 
 ## Features
 
-- **Policy Engine** — YAML-based jurisdiction policies with strict and relaxed enforcement modes
+- **Policy Engine** — YAML-based jurisdiction policies with strict all-hop enforcement
 - **Compliance Receipts** — Ed25519-signed receipts with monotonic sequence numbers and append-only storage (BoltDB)
 - **Violation Detection** — Real-time pub/sub alerting via Server-Sent Events with severity classification
 - **Path Pre-filtering** — Filter available SCION paths to only jurisdiction-compliant options before sending

@@ -7,11 +7,9 @@ import (
 )
 
 func TestValidate_Valid(t *testing.T) {
-	for _, mode := range []string{"strict", "relaxed"} {
-		p := &Policy{ID: "p1", AllowedISDs: []uint16{1}, Mode: mode}
-		if err := p.Validate(); err != nil {
-			t.Errorf("mode %s: unexpected error: %v", mode, err)
-		}
+	p := &Policy{ID: "p1", AllowedISDs: []uint16{1}, Mode: ModeStrict}
+	if err := p.Validate(); err != nil {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -37,16 +35,18 @@ func TestValidate_MissingMode(t *testing.T) {
 }
 
 func TestValidate_InvalidMode(t *testing.T) {
-	p := &Policy{ID: "p1", AllowedISDs: []uint16{1}, Mode: "permissive"}
-	if err := p.Validate(); err == nil {
-		t.Fatal("expected error for invalid mode")
+	for _, mode := range []string{"relaxed", "permissive"} {
+		p := &Policy{ID: "p1", AllowedISDs: []uint16{1}, Mode: mode}
+		if err := p.Validate(); err == nil {
+			t.Fatalf("expected error for invalid mode %q", mode)
+		}
 	}
 }
 
 const validYAML = `id: p1
 name: Test
 allowed_isds: [1, 2]
-mode: relaxed
+mode: strict
 `
 
 func TestLoadFromFile_Valid(t *testing.T) {
@@ -60,7 +60,7 @@ func TestLoadFromFile_Valid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.ID != "p1" || p.Mode != "relaxed" || len(p.AllowedISDs) != 2 {
+	if p.ID != "p1" || p.Mode != ModeStrict || len(p.AllowedISDs) != 2 {
 		t.Fatalf("unexpected policy: %+v", p)
 	}
 }
@@ -76,7 +76,7 @@ func TestLoadFromFile_DefaultMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Mode != "strict" {
+	if p.Mode != ModeStrict {
 		t.Fatalf("expected default mode 'strict', got %q", p.Mode)
 	}
 }

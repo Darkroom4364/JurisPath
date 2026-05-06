@@ -62,7 +62,7 @@ func TestChecker_Violation(t *testing.T) {
 	}
 }
 
-func TestChecker_RelaxedMode(t *testing.T) {
+func TestChecker_RelaxedModeFailsClosed(t *testing.T) {
 	p := &policy.Policy{
 		ID:          "relaxed-v1",
 		AllowedISDs: []uint16{1, 2},
@@ -83,8 +83,41 @@ func TestChecker_RelaxedMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.Compliant {
-		t.Error("relaxed mode should allow transit through unauthorized ISDs")
+	if result.Compliant {
+		t.Fatal("relaxed mode must fail closed")
+	}
+	if len(result.OffendingHops) != len(path.Hops) {
+		t.Fatalf("expected all hops to be marked offending, got %d", len(result.OffendingHops))
+	}
+	if result.ViolatedClause != `unsupported policy mode "relaxed"; failing closed` {
+		t.Fatalf("unexpected violated clause: %q", result.ViolatedClause)
+	}
+}
+
+func TestChecker_UnknownModeFailsClosed(t *testing.T) {
+	p := &policy.Policy{
+		ID:          "unknown-v1",
+		AllowedISDs: []uint16{1, 2},
+		Mode:        "permissive",
+	}
+	c := NewChecker(p)
+
+	path := &model.SCIONPath{
+		Hops: []model.ASHop{
+			{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"},
+			{IA: "2-ff00:0:210", ISD: 2, AS: "ff00:0:210"},
+		},
+	}
+
+	result, err := c.Check(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Compliant {
+		t.Fatal("unknown mode must fail closed")
+	}
+	if len(result.OffendingHops) != len(path.Hops) {
+		t.Fatalf("expected all hops to be marked offending, got %d", len(result.OffendingHops))
 	}
 }
 
