@@ -3,6 +3,7 @@ package receipt
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -16,6 +17,12 @@ var (
 	receiptsBucket     = []byte("receipts")
 	receiptsByTxBucket = []byte("receipts_by_tx")
 	seqBucket          = []byte("seq")
+)
+
+var (
+	ErrDuplicateReceiptID     = errors.New("duplicate receipt id")
+	ErrDuplicateTransactionID = errors.New("duplicate transaction id")
+	ErrDuplicateSequence      = errors.New("duplicate receipt sequence")
 )
 
 // Store is the interface for receipt persistence.
@@ -35,6 +42,7 @@ type MemoryStore struct {
 	receipts []*model.ComplianceReceipt
 	byID     map[string]*model.ComplianceReceipt
 	byTxID   map[string]*model.ComplianceReceipt
+	bySeq    map[uint64]*model.ComplianceReceipt
 }
 
 // NewMemoryStore creates an empty in-memory receipt store.
@@ -42,15 +50,26 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		byID:   make(map[string]*model.ComplianceReceipt),
 		byTxID: make(map[string]*model.ComplianceReceipt),
+		bySeq:  make(map[uint64]*model.ComplianceReceipt),
 	}
 }
 
 func (s *MemoryStore) Append(r *model.ComplianceReceipt) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.byID[r.ID]; ok {
+		return fmt.Errorf("%w: %s", ErrDuplicateReceiptID, r.ID)
+	}
+	if _, ok := s.byTxID[r.TransactionID]; ok {
+		return fmt.Errorf("%w: %s", ErrDuplicateTransactionID, r.TransactionID)
+	}
+	if _, ok := s.bySeq[r.SeqNo]; ok {
+		return fmt.Errorf("%w: %d", ErrDuplicateSequence, r.SeqNo)
+	}
 	s.receipts = append(s.receipts, r)
 	s.byID[r.ID] = r
 	s.byTxID[r.TransactionID] = r
+	s.bySeq[r.SeqNo] = r
 	return nil
 }
 
@@ -138,6 +157,9 @@ func (s *BoltStore) backfillSeqBucket() error {
 			}
 			seqKey := make([]byte, 8)
 			binary.BigEndian.PutUint64(seqKey, r.SeqNo)
+			if existing := seq.Get(seqKey); existing != nil {
+				return fmt.Errorf("%w: %d", ErrDuplicateSequence, r.SeqNo)
+			}
 			if err := seq.Put(seqKey, k); err != nil {
 				return err
 			}
@@ -157,15 +179,28 @@ func (s *BoltStore) Append(r *model.ComplianceReceipt) error {
 		return fmt.Errorf("marshaling receipt: %w", err)
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.Bucket(receiptsBucket).Put([]byte(r.ID), data); err != nil {
-			return err
+		receipts := tx.Bucket(receiptsBucket)
+		byTx := tx.Bucket(receiptsByTxBucket)
+		seq := tx.Bucket(seqBucket)
+
+		if existing := receipts.Get([]byte(r.ID)); existing != nil {
+			return fmt.Errorf("%w: %s", ErrDuplicateReceiptID, r.ID)
 		}
-		if err := tx.Bucket(receiptsByTxBucket).Put([]byte(r.TransactionID), []byte(r.ID)); err != nil {
-			return err
+		if existing := byTx.Get([]byte(r.TransactionID)); existing != nil {
+			return fmt.Errorf("%w: %s", ErrDuplicateTransactionID, r.TransactionID)
 		}
 		seqKey := make([]byte, 8)
 		binary.BigEndian.PutUint64(seqKey, r.SeqNo)
-		seq := tx.Bucket(seqBucket)
+		if existing := seq.Get(seqKey); existing != nil {
+			return fmt.Errorf("%w: %d", ErrDuplicateSequence, r.SeqNo)
+		}
+
+		if err := receipts.Put([]byte(r.ID), data); err != nil {
+			return err
+		}
+		if err := byTx.Put([]byte(r.TransactionID), []byte(r.ID)); err != nil {
+			return err
+		}
 		if err := seq.Put(seqKey, []byte(r.ID)); err != nil {
 			return err
 		}

@@ -22,14 +22,18 @@ const (
 
 // Transaction represents a token-transfer settlement between two validators.
 type Transaction struct {
-	ID        string    `json:"id"`
-	From      string    `json:"from"`      // validator address
-	To        string    `json:"to"`        // validator address
-	Amount    int64     `json:"amount"`
-	Currency  string    `json:"currency"`
-	Status    TxStatus  `json:"status"`
-	Timestamp time.Time `json:"timestamp"`
-	Nonce     uint64    `json:"nonce"`
+	ID              string    `json:"id"`
+	From            string    `json:"from"` // validator address
+	To              string    `json:"to"`   // validator address
+	Amount          int64     `json:"amount"`
+	Currency        string    `json:"currency"`
+	PolicyID        string    `json:"policy_id,omitempty"`
+	PathFingerprint string    `json:"path_fingerprint,omitempty"`
+	RequestDigest   string    `json:"request_digest,omitempty"`
+	ReceiptID       string    `json:"receipt_id,omitempty"`
+	Status          TxStatus  `json:"status"`
+	Timestamp       time.Time `json:"timestamp"`
+	Nonce           uint64    `json:"nonce"`
 }
 
 // ConsensusMessage is exchanged between validators during consensus rounds.

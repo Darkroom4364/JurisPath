@@ -1,6 +1,7 @@
 package receipt_test
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +11,10 @@ import (
 )
 
 func makeReceipt(id, txID string) *model.ComplianceReceipt {
+	return makeReceiptWithSeq(id, txID, 1)
+}
+
+func makeReceiptWithSeq(id, txID string, seqNo uint64) *model.ComplianceReceipt {
 	return &model.ComplianceReceipt{
 		ID:            id,
 		TransactionID: txID,
@@ -17,7 +22,7 @@ func makeReceipt(id, txID string) *model.ComplianceReceipt {
 		Path: model.SCIONPath{
 			Fingerprint: "fp-" + id,
 		},
-		SeqNo:     1,
+		SeqNo:     seqNo,
 		Timestamp: time.Now().UTC(),
 	}
 }
@@ -90,7 +95,7 @@ func TestBoltStore_ListAndCount(t *testing.T) {
 	defer store.Close()
 
 	for i := 0; i < 5; i++ {
-		r := makeReceipt("r"+string(rune('A'+i)), "tx"+string(rune('A'+i)))
+		r := makeReceiptWithSeq("r"+string(rune('A'+i)), "tx"+string(rune('A'+i)), uint64(i+1))
 		if err := store.Append(r); err != nil {
 			t.Fatalf("Append: %v", err)
 		}
@@ -176,5 +181,85 @@ func TestMemoryStore_Interface(t *testing.T) {
 	}
 	if got == nil || got.TransactionID != "tx1" {
 		t.Errorf("unexpected result: %+v", got)
+	}
+}
+
+func TestMemoryStore_RejectsDuplicates(t *testing.T) {
+	tests := []struct {
+		name string
+		next *model.ComplianceReceipt
+		want error
+	}{
+		{
+			name: "receipt id",
+			next: makeReceiptWithSeq("r1", "tx2", 2),
+			want: receipt.ErrDuplicateReceiptID,
+		},
+		{
+			name: "transaction id",
+			next: makeReceiptWithSeq("r2", "tx1", 2),
+			want: receipt.ErrDuplicateTransactionID,
+		},
+		{
+			name: "sequence",
+			next: makeReceiptWithSeq("r2", "tx2", 1),
+			want: receipt.ErrDuplicateSequence,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := receipt.NewMemoryStore()
+			if err := store.Append(makeReceiptWithSeq("r1", "tx1", 1)); err != nil {
+				t.Fatalf("Append first: %v", err)
+			}
+			err := store.Append(tt.next)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Append duplicate error = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestBoltStore_RejectsDuplicates(t *testing.T) {
+	tests := []struct {
+		name string
+		next *model.ComplianceReceipt
+		want error
+	}{
+		{
+			name: "receipt id",
+			next: makeReceiptWithSeq("r1", "tx2", 2),
+			want: receipt.ErrDuplicateReceiptID,
+		},
+		{
+			name: "transaction id",
+			next: makeReceiptWithSeq("r2", "tx1", 2),
+			want: receipt.ErrDuplicateTransactionID,
+		},
+		{
+			name: "sequence",
+			next: makeReceiptWithSeq("r2", "tx2", 1),
+			want: receipt.ErrDuplicateSequence,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "receipts.db")
+			store, err := receipt.NewBoltStore(dbPath)
+			if err != nil {
+				t.Fatalf("NewBoltStore: %v", err)
+			}
+			defer store.Close()
+
+			if err := store.Append(makeReceiptWithSeq("r1", "tx1", 1)); err != nil {
+				t.Fatalf("Append first: %v", err)
+			}
+			err = store.Append(tt.next)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Append duplicate error = %v, want %v", err, tt.want)
+			}
+		})
 	}
 }

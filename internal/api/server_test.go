@@ -45,7 +45,15 @@ type failingAppendReceiptStore struct {
 	err   error
 }
 
+type failingProofProvider struct {
+	err error
+}
+
 type rejectingPathExtractor struct{}
+
+func (p failingProofProvider) BuildProof(model.ASHop) (model.ISDProof, error) {
+	return model.ISDProof{}, p.err
+}
 
 func (rejectingPathExtractor) ExtractHops([]byte) ([]model.ASHop, error) {
 	return nil, errors.New("SCION path extraction unavailable")
@@ -181,6 +189,20 @@ func nonCompliantPath(t *testing.T) []byte {
 	raw, err := scion.NewMockPath(hops)
 	if err != nil {
 		t.Fatalf("creating mock path: %v", err)
+	}
+	return raw
+}
+
+func alternateCompliantPath(t *testing.T) []byte {
+	t.Helper()
+	hops := []model.ASHop{
+		{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"},
+		{IA: "1-ff00:0:111", ISD: 1, AS: "ff00:0:111"},
+		{IA: "2-ff00:0:210", ISD: 2, AS: "ff00:0:210"},
+	}
+	raw, err := scion.NewMockPath(hops)
+	if err != nil {
+		t.Fatalf("creating alternate mock path: %v", err)
 	}
 	return raw
 }
@@ -1079,7 +1101,7 @@ func TestReceiptPersistenceFailureAudits(t *testing.T) {
 			wantContext: "check",
 		},
 		{
-			name: "settle endpoint persists failure audit and still returns success",
+			name: "settle endpoint persists failure audit and returns degraded failure",
 			call: func(t *testing.T, url string) {
 				resp, result := postSettle(t, url, SettleRequest{
 					TransactionID: "tx-settle-fail",
@@ -1090,8 +1112,11 @@ func TestReceiptPersistenceFailureAudits(t *testing.T) {
 					PolicyID:      "test-policy",
 					RawPath:       compliantPath(t),
 				})
-				if resp.StatusCode != http.StatusOK {
-					t.Fatalf("expected 200, got %d: %v", resp.StatusCode, result)
+				if resp.StatusCode != http.StatusInternalServerError {
+					t.Fatalf("expected 500, got %d: %v", resp.StatusCode, result)
+				}
+				if result["code"] != "SETTLEMENT_RECEIPT_FAILED" {
+					t.Fatalf("expected code SETTLEMENT_RECEIPT_FAILED, got %v", result["code"])
 				}
 				consensus, ok := result["consensus"].(map[string]any)
 				if !ok || consensus["confirmed"] != true {
@@ -1138,6 +1163,236 @@ func TestReceiptPersistenceFailureAudits(t *testing.T) {
 				t.Fatal("expected non-empty receipt_id")
 			}
 		})
+	}
+}
+
+func TestSettleIdempotentRetryReturnsOriginalReceipt(t *testing.T) {
+	env := setupTestEnv(t)
+	req := SettleRequest{
+		TransactionID: "tx-idempotent",
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	}
+
+	resp, first := postSettle(t, env.server.URL, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first settle expected 200, got %d: %v", resp.StatusCode, first)
+	}
+	firstReceipt := first["compliance"].(map[string]any)["receipt"].(map[string]any)
+
+	resp, second := postSettle(t, env.server.URL, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("retry expected 200, got %d: %v", resp.StatusCode, second)
+	}
+	if second["idempotent"] != true {
+		t.Fatalf("expected idempotent=true, got %v", second["idempotent"])
+	}
+	secondReceipt := second["compliance"].(map[string]any)["receipt"].(map[string]any)
+	if secondReceipt["id"] != firstReceipt["id"] {
+		t.Fatalf("retry receipt id = %v, want original %v", secondReceipt["id"], firstReceipt["id"])
+	}
+	if second["receipt_persisted"] != true {
+		t.Fatalf("expected receipt_persisted=true, got %v", second["receipt_persisted"])
+	}
+	if count, err := env.api.receipts.Count(); err != nil || count != 1 {
+		t.Fatalf("receipt count = %d, err=%v; want 1", count, err)
+	}
+	if got := env.ledger.GetBalance("CH", "CHF"); got != 9900 {
+		t.Fatalf("CH balance after idempotent retry = %d, want 9900", got)
+	}
+}
+
+func TestSettleDuplicateMismatchedPayloadConflicts(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*SettleRequest)
+	}{
+		{
+			name: "amount",
+			mutate: func(req *SettleRequest) {
+				req.Amount = 200
+			},
+		},
+		{
+			name: "path",
+			mutate: func(req *SettleRequest) {
+				req.RawPath = alternateCompliantPath(t)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := setupTestEnv(t)
+			req := SettleRequest{
+				TransactionID: "tx-conflict",
+				From:          "CH",
+				To:            "EU",
+				Amount:        100,
+				Currency:      "CHF",
+				PolicyID:      "test-policy",
+				RawPath:       compliantPath(t),
+			}
+			resp, first := postSettle(t, env.server.URL, req)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("first settle expected 200, got %d: %v", resp.StatusCode, first)
+			}
+
+			conflicting := req
+			tt.mutate(&conflicting)
+			resp, result := postSettle(t, env.server.URL, conflicting)
+			if resp.StatusCode != http.StatusConflict {
+				t.Fatalf("conflicting retry expected 409, got %d: %v", resp.StatusCode, result)
+			}
+			if result["code"] != "TX_CONFLICT" {
+				t.Fatalf("expected TX_CONFLICT, got %v", result["code"])
+			}
+			if count, err := env.api.receipts.Count(); err != nil || count != 1 {
+				t.Fatalf("receipt count = %d, err=%v; want 1", count, err)
+			}
+			if got := env.ledger.GetBalance("CH", "CHF"); got != 9900 {
+				t.Fatalf("CH balance after conflicting retry = %d, want 9900", got)
+			}
+		})
+	}
+}
+
+func TestCanonicalSettleRequestDigestCoversSettlementPolicyAndPath(t *testing.T) {
+	base := SettleRequest{
+		TransactionID: "tx-digest",
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	}
+	path, err := scion.BuildSCIONPath(&scion.MockPathExtractor{}, base.RawPath)
+	if err != nil {
+		t.Fatalf("building path: %v", err)
+	}
+	baseDigest, err := canonicalSettleRequestDigest(base, base.TransactionID, path)
+	if err != nil {
+		t.Fatalf("base digest: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*SettleRequest)
+	}{
+		{
+			name: "amount",
+			mutate: func(req *SettleRequest) {
+				req.Amount = 101
+			},
+		},
+		{
+			name: "policy",
+			mutate: func(req *SettleRequest) {
+				req.PolicyID = "other-policy"
+			},
+		},
+		{
+			name: "path",
+			mutate: func(req *SettleRequest) {
+				req.RawPath = alternateCompliantPath(t)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changed := base
+			tt.mutate(&changed)
+			changedPath, err := scion.BuildSCIONPath(&scion.MockPathExtractor{}, changed.RawPath)
+			if err != nil {
+				t.Fatalf("building changed path: %v", err)
+			}
+			changedDigest, err := canonicalSettleRequestDigest(changed, changed.TransactionID, changedPath)
+			if err != nil {
+				t.Fatalf("changed digest: %v", err)
+			}
+			if changedDigest == baseDigest {
+				t.Fatalf("digest did not change for %s", tt.name)
+			}
+		})
+	}
+}
+
+func TestSettleDuplicatePendingReturnsConflict(t *testing.T) {
+	env := setupTestEnv(t)
+	req := SettleRequest{
+		TransactionID: "tx-pending",
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	}
+	path, err := scion.BuildSCIONPath(&scion.MockPathExtractor{}, req.RawPath)
+	if err != nil {
+		t.Fatalf("building path: %v", err)
+	}
+	digest, err := canonicalSettleRequestDigest(req, req.TransactionID, path)
+	if err != nil {
+		t.Fatalf("digest: %v", err)
+	}
+	if err := env.ledger.SubmitTransaction(&dlt.Transaction{
+		ID:              req.TransactionID,
+		From:            req.From,
+		To:              req.To,
+		Amount:          req.Amount,
+		Currency:        req.Currency,
+		PolicyID:        req.PolicyID,
+		PathFingerprint: path.Fingerprint,
+		RequestDigest:   digest,
+	}); err != nil {
+		t.Fatalf("submit pending tx: %v", err)
+	}
+
+	resp, result := postSettle(t, env.server.URL, req)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %v", resp.StatusCode, result)
+	}
+	if result["code"] != "TX_PENDING" {
+		t.Fatalf("expected TX_PENDING, got %v", result["code"])
+	}
+}
+
+func TestSettleReceiptGenerationFailureReturnsDegradedFailure(t *testing.T) {
+	gen := mustGenerator(t)
+	gen.WithProofProvider(failingProofProvider{err: errors.New("missing TRC")})
+	env := setupTestEnvWithGeneratorReceiptStoreExtractorAndOptions(t, gen, receipt.NewMemoryStore(), &scion.MockPathExtractor{})
+
+	resp, result := postSettle(t, env.server.URL, SettleRequest{
+		TransactionID: "tx-receipt-issue-fail",
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	})
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %v", resp.StatusCode, result)
+	}
+	if result["code"] != "SETTLEMENT_RECEIPT_FAILED" {
+		t.Fatalf("expected SETTLEMENT_RECEIPT_FAILED, got %v", result["code"])
+	}
+	if result["receipt_persisted"] != false {
+		t.Fatalf("expected receipt_persisted=false, got %v", result["receipt_persisted"])
+	}
+	consensus, ok := result["consensus"].(map[string]any)
+	if !ok || consensus["confirmed"] != true {
+		t.Fatalf("expected consensus.confirmed=true, got %v", result["consensus"])
+	}
+	if count, err := env.api.receipts.Count(); err != nil || count != 0 {
+		t.Fatalf("receipt count = %d, err=%v; want 0", count, err)
 	}
 }
 

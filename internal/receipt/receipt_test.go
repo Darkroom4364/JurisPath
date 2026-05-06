@@ -36,6 +36,24 @@ func (legacyProofProvider) BuildProof(hop model.ASHop) (model.ISDProof, error) {
 	return model.ISDProof{IA: hop.IA, ISD: hop.ISD}, nil
 }
 
+type appendFailStore struct {
+	err error
+}
+
+func (s appendFailStore) Append(*model.ComplianceReceipt) error { return s.err }
+func (s appendFailStore) GetByTxID(string) (*model.ComplianceReceipt, error) {
+	return nil, nil
+}
+func (s appendFailStore) GetByID(string) (*model.ComplianceReceipt, error) {
+	return nil, nil
+}
+func (s appendFailStore) List() ([]*model.ComplianceReceipt, error) { return nil, nil }
+func (s appendFailStore) Count() (int, error)                       { return 0, nil }
+func (s appendFailStore) Last() (*model.ComplianceReceipt, error)   { return nil, nil }
+func (s appendFailStore) ListRange(uint64, uint64) ([]*model.ComplianceReceipt, error) {
+	return nil, nil
+}
+
 type testThresholdSigner struct {
 	err     error
 	payload []byte
@@ -243,6 +261,43 @@ func TestGenerator_IssueAndVerify(t *testing.T) {
 	valid, _ = Verify(rcpt)
 	if valid {
 		t.Error("tampered receipt should not verify")
+	}
+}
+
+func TestGenerator_IssueAndAppendDoesNotAdvanceChainOnStoreFailure(t *testing.T) {
+	gen, err := NewGenerator()
+	if err != nil {
+		t.Fatalf("creating generator: %v", err)
+	}
+	path := &model.SCIONPath{
+		Hops: []model.ASHop{
+			{IA: "1-ff00:0:110", ISD: 1, AS: "ff00:0:110"},
+			{IA: "2-ff00:0:210", ISD: 2, AS: "ff00:0:210"},
+		},
+		Fingerprint: "abc123",
+	}
+
+	failed, err := gen.IssueAndAppend(appendFailStore{err: errors.New("disk full")}, "tx-fail", "policy-v1", path)
+	if err == nil {
+		t.Fatal("expected append failure")
+	}
+	if failed == nil {
+		t.Fatal("expected tentative receipt on append failure")
+	}
+	if failed.SeqNo != 1 {
+		t.Fatalf("failed receipt seq = %d, want 1", failed.SeqNo)
+	}
+
+	store := NewMemoryStore()
+	succeeded, err := gen.IssueAndAppend(store, "tx-ok", "policy-v1", path)
+	if err != nil {
+		t.Fatalf("successful IssueAndAppend: %v", err)
+	}
+	if succeeded.SeqNo != 1 {
+		t.Fatalf("successful receipt seq = %d, want 1 after failed append rollback", succeeded.SeqNo)
+	}
+	if len(succeeded.PreviousHash) != 0 {
+		t.Fatal("successful receipt should still be genesis after failed append")
 	}
 }
 
