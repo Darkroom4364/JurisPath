@@ -34,6 +34,12 @@ func (f *PathFilter) FilterPaths(paths []model.SCIONPath) *FilterResult {
 		NonCompliant: []model.SCIONPath{},
 	}
 
+	if f.policy.Mode != policy.ModeStrict {
+		slog.Error("unsupported policy mode in path filter; failing closed", "policy_id", f.policy.ID, "mode", f.policy.Mode, "candidates", len(paths))
+		result.NonCompliant = append(result.NonCompliant, paths...)
+		return result
+	}
+
 	for _, p := range paths {
 		if len(p.Hops) > 0 && len(CheckHopsCompliant(p.Hops, f.policy.AllowedISDs, f.policy.Mode)) == 0 {
 			result.Compliant = append(result.Compliant, p)

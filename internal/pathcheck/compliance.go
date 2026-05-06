@@ -1,6 +1,9 @@
 package pathcheck
 
-import "github.com/jurispath/jurispath/pkg/model"
+import (
+	"github.com/jurispath/jurispath/internal/policy"
+	"github.com/jurispath/jurispath/pkg/model"
+)
 
 // CheckHopsCompliant returns the offending hops that violate the given policy mode
 // and allowed ISD set. Returns nil if all hops are compliant.
@@ -15,7 +18,7 @@ func CheckHopsCompliant(hops []model.ASHop, allowedISDs []uint16, mode string) [
 	}
 
 	switch mode {
-	case "strict":
+	case policy.ModeStrict:
 		var offending []model.ASHop
 		for _, hop := range hops {
 			if !allowed[hop.ISD] {
@@ -23,17 +26,7 @@ func CheckHopsCompliant(hops []model.ASHop, allowedISDs []uint16, mode string) [
 			}
 		}
 		return offending
-	case "relaxed":
-		var offending []model.ASHop
-		first, last := hops[0], hops[len(hops)-1]
-		if !allowed[first.ISD] {
-			offending = append(offending, first)
-		}
-		if !allowed[last.ISD] {
-			offending = append(offending, last)
-		}
-		return offending
 	default:
-		return nil
+		return append([]model.ASHop(nil), hops...)
 	}
 }

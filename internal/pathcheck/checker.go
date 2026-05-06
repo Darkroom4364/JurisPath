@@ -41,8 +41,13 @@ func (c *Checker) Check(path *model.SCIONPath) (*CheckResult, error) {
 		return nil, fmt.Errorf("path has no hops")
 	}
 
-	if c.policy.Mode != "strict" && c.policy.Mode != "relaxed" {
-		return nil, fmt.Errorf("unknown policy mode: %s", c.policy.Mode)
+	if c.policy.Mode != policy.ModeStrict {
+		slog.Error("unsupported policy mode; failing closed", "policy_id", c.policy.ID, "mode", c.policy.Mode)
+		return &CheckResult{
+			Compliant:      false,
+			OffendingHops:  append([]model.ASHop(nil), path.Hops...),
+			ViolatedClause: fmt.Sprintf("unsupported policy mode %q; failing closed", c.policy.Mode),
+		}, nil
 	}
 
 	offending := CheckHopsCompliant(path.Hops, c.policy.AllowedISDs, c.policy.Mode)

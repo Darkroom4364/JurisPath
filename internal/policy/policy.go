@@ -16,8 +16,10 @@ type Policy struct {
 	Description string   `yaml:"description" json:"description"`
 	Version     int      `yaml:"version" json:"version"`
 	AllowedISDs []uint16 `yaml:"allowed_isds" json:"allowed_isds"`
-	Mode        string   `yaml:"mode" json:"mode"` // "strict" (all hops) or "relaxed" (entry/exit only)
+	Mode        string   `yaml:"mode" json:"mode"` // "strict" requires every hop to use an allowed ISD.
 }
+
+const ModeStrict = "strict"
 
 // Validate checks that a policy has all required fields.
 func (p *Policy) Validate() error {
@@ -30,8 +32,8 @@ func (p *Policy) Validate() error {
 	if p.Mode == "" {
 		return fmt.Errorf("policy %s: mode is required", p.ID)
 	}
-	if p.Mode != "strict" && p.Mode != "relaxed" {
-		return fmt.Errorf("policy %s: mode must be 'strict' or 'relaxed', got %q", p.ID, p.Mode)
+	if p.Mode != ModeStrict {
+		return fmt.Errorf("policy %s: mode must be %q, got %q", p.ID, ModeStrict, p.Mode)
 	}
 	return nil
 }
@@ -47,7 +49,7 @@ func LoadFromFile(path string) (*Policy, error) {
 		return nil, fmt.Errorf("parsing policy YAML: %w", err)
 	}
 	if p.Mode == "" {
-		p.Mode = "strict"
+		p.Mode = ModeStrict
 	}
 	if err := p.Validate(); err != nil {
 		return nil, err
