@@ -32,12 +32,59 @@ declare -a ISD_LIST=(
 echo "=== JurisPath SCION Crypto Material Generator ==="
 echo "Output directory: $CRYPTO_DIR"
 
+crypto_as_dir() {
+  local isd_num="$1"
+  local as_raw="$2"
+  local as_sanitized="${as_raw//:/_}"
+  local candidate
+
+  for candidate in \
+    "$CRYPTO_DIR/ISD${isd_num}/AS${as_raw}" \
+    "$CRYPTO_DIR/ISD${isd_num}/AS${as_sanitized}"
+  do
+    if [ -d "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  echo "missing crypto directory for ISD${isd_num} AS${as_raw}" >&2
+  return 1
+}
+
+distribute_crypto() {
+  echo "Distributing crypto to AS topology directories..."
+
+  for as_entry in "${AS_LIST[@]}"; do
+    IFS='|' read -r isd_as as_dir as_type <<< "$as_entry"
+    isd_num="${isd_as%%-*}"
+    as_raw="${isd_as#*-}"
+
+    src_as="$(crypto_as_dir "$isd_num" "$as_raw")"
+    DEST="$TOPO_DIR/$as_dir/crypto"
+    rm -rf "$DEST"
+    mkdir -p "$DEST/as" "$DEST/trcs" "$DEST/keys"
+
+    # Copy AS-specific crypto
+    cp "$src_as/crypto/as/"* "$DEST/as/"
+    cp "$src_as/keys/"* "$DEST/keys/"
+
+    # Copy TRC for this ISD
+    cp "$CRYPTO_DIR/ISD${isd_num}/trcs/"* "$DEST/trcs/"
+
+    echo "  $as_dir -> crypto distributed"
+  done
+}
+
 # ── Method 1: Use scion-pki testcrypto if available ──────────────────────
 if command -v scion-pki &>/dev/null; then
   echo "Found scion-pki, using testcrypto..."
+  rm -rf "$CRYPTO_DIR"
   cd "$TOPO_DIR"
   scion-pki testcrypto -t topology.topo -o "$CRYPTO_DIR"
   echo "Crypto material generated via scion-pki at $CRYPTO_DIR"
+  cd "$DEPLOY_DIR"
+  distribute_crypto
   echo "Done."
   exit 0
 fi
@@ -130,30 +177,11 @@ echo ""
 echo "IMPORTANT: The generated TRCs are placeholders. For a fully working"
 echo "SCION deployment, install scion-pki and re-run this script, or build"
 echo "the SCION Docker image first and run:"
-echo "  docker run --rm -v \$PWD/topology:/work scion-base scion-pki testcrypto -t /work/topology.topo -o /work/crypto"
+echo "  docker run --rm -v \$PWD/deploy/topology:/work/topology -v \$PWD/deploy/crypto:/work/crypto jurispath-scion-base scion-pki testcrypto -t /work/topology/topology.topo -o /work/crypto"
 echo ""
 
 # ── Copy crypto into per-AS topology directories ────────────────────────
-echo "Distributing crypto to AS topology directories..."
-
-for as_entry in "${AS_LIST[@]}"; do
-  IFS='|' read -r isd_as as_dir as_type <<< "$as_entry"
-  isd_num="${isd_as%%-*}"
-  as_raw="${isd_as#*-}"
-
-  DEST="$TOPO_DIR/$as_dir/crypto"
-  rm -rf "$DEST"
-  mkdir -p "$DEST/as" "$DEST/trcs" "$DEST/keys"
-
-  # Copy AS-specific crypto
-  cp "$CRYPTO_DIR/ISD${isd_num}/AS${as_raw}/crypto/as/"* "$DEST/as/"
-  cp "$CRYPTO_DIR/ISD${isd_num}/AS${as_raw}/keys/"* "$DEST/keys/"
-
-  # Copy TRC for this ISD
-  cp "$CRYPTO_DIR/ISD${isd_num}/trcs/"* "$DEST/trcs/"
-
-  echo "  $as_dir -> crypto distributed"
-done
+distribute_crypto
 
 echo ""
 echo "Done. All crypto material is in $CRYPTO_DIR and copied to per-AS dirs."

@@ -1,3 +1,7 @@
+# Default local/demo validator topology.
+# Addresses use loopback because the PoC API settlement path runs all
+# validators in one process unless JURISPATH_SCION_MODE=true. They are not
+# production SCION validator addresses.
 - id: CH
   address: "1-ff00:0:111,[127.0.0.1]:30100"
   balance:

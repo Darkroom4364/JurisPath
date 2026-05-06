@@ -24,7 +24,7 @@ type Config struct {
 	AdminToken     string // privileged token for administrative endpoints
 	AllowUnauthAPI bool   // explicitly allow unauthenticated API access for demo/dev
 	ValidatorsFile string // path to validators.yaml
-	SCIONMode      bool   // true = validators communicate over SCION
+	SCIONMode      bool   // true = enable experimental SCION startup/transport wiring
 	SCIONDaemon    string // SCION daemon address (e.g. "127.0.0.1:30255")
 	ValidatorID    string // this node's validator ID (required in SCION mode)
 	ThresholdK     int    // optional threshold receipt signature quorum

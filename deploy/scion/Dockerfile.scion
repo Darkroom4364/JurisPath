@@ -1,24 +1,32 @@
 FROM debian:bookworm-slim
 
 ARG SCION_VERSION=0.14.0
+ARG TARGETARCH=amd64
 
-# Install dependencies and SCION binaries
-# NOTE: The exact release asset name may vary. Check:
-#   https://github.com/scionproto/scion/releases/tag/v0.14.0
-# The archive is expected to contain: scion-control, scion-router, scion-daemon, scion-pki, scion
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends wget ca-certificates supervisor && \
-    wget -q "https://github.com/scionproto/scion/releases/download/v${SCION_VERSION}/scion_v${SCION_VERSION}_amd64_linux.tar.gz" \
-         -O /tmp/scion.tar.gz && \
-    mkdir -p /tmp/scion && \
-    tar -xzf /tmp/scion.tar.gz -C /tmp/scion && \
-    cp /tmp/scion/scion* /usr/local/bin/ 2>/dev/null || \
-    cp /tmp/scion/* /usr/local/bin/ 2>/dev/null || true && \
-    chmod +x /usr/local/bin/scion* && \
-    rm -rf /tmp/scion /tmp/scion.tar.gz && \
-    apt-get purge -y wget && \
-    apt-get autoremove -y && \
-    apt-get clean && \
+# Install dependencies and SCION binaries from verified v0.14.0 release assets.
+# The release provides Debian archives named:
+#   scion_0.14.0_deb_amd64.tar.gz
+#   scion_0.14.0_deb_arm64.tar.gz
+RUN set -eux; \
+    case "$TARGETARCH" in \
+      amd64|arm64) deb_arch="$TARGETARCH" ;; \
+      *) echo "unsupported TARGETARCH=$TARGETARCH; SCION demo image supports amd64 and arm64" >&2; exit 1 ;; \
+    esac; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl supervisor; \
+    curl -fsSL "https://github.com/scionproto/scion/releases/download/v${SCION_VERSION}/scion_${SCION_VERSION}_deb_${deb_arch}.tar.gz" \
+      -o /tmp/scion.tar.gz; \
+    mkdir -p /tmp/scion; \
+    tar -xzf /tmp/scion.tar.gz -C /tmp/scion; \
+    apt-get install -y /tmp/scion/*.deb; \
+    for bin in scion scion-pki scion-control scion-router scion-daemon; do \
+      command -v "$bin"; \
+      ln -sf "$(command -v "$bin")" "/usr/local/bin/$bin"; \
+    done; \
+    rm -rf /tmp/scion /tmp/scion.tar.gz; \
+    apt-get purge -y curl; \
+    apt-get autoremove -y; \
+    apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
 # Create directories for SCION config, crypto, and logs
