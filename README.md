@@ -181,6 +181,20 @@ default. Local demo targets set `JURISPATH_UNAUTHENTICATED_API=true` explicitly.
 | `GET` | `/api/events` | SSE stream for real-time violation alerts |
 | `POST` | `/api/rotate-key` | Rotate the oracle signing key and archive the old key. Requires `X-JurisPath-Admin-Token`. |
 
+### Settlement Atomicity
+
+`POST /api/settle` treats a client-supplied `transaction_id` as an idempotency
+key. The server stores a canonical digest of the original settlement request,
+including amount, currency, policy, and path fingerprint. A retry with the same
+request returns the original settlement receipt; a retry with different
+settlement or path data returns `409 TX_CONFLICT`.
+
+Ordinary settlement success requires both confirmed consensus and a durable
+receipt. If consensus commits but receipt generation or persistence fails, the
+API returns `500 SETTLEMENT_RECEIPT_FAILED` with `consensus.confirmed=true`,
+`receipt_persisted=false`, and a persistence warning so the caller cannot
+mistake a receipt-less settlement for normal success.
+
 ## Project Structure
 
 ```

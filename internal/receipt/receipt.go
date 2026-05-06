@@ -187,13 +187,43 @@ func (g *Generator) Issue(txID, policyID string, path *model.SCIONPath) (*model.
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.seqNo++
+	receipt, lastHash, err := g.buildReceiptLocked(txID, policyID, path)
+	if err != nil {
+		return nil, err
+	}
+
+	g.seqNo = receipt.SeqNo
+	g.lastHash = lastHash
+	return receipt, nil
+}
+
+// IssueAndAppend creates a signed receipt, appends it to the durable store,
+// and advances the generator chain state only after persistence succeeds.
+func (g *Generator) IssueAndAppend(store Store, txID, policyID string, path *model.SCIONPath) (*model.ComplianceReceipt, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	receipt, lastHash, err := g.buildReceiptLocked(txID, policyID, path)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.Append(receipt); err != nil {
+		return receipt, err
+	}
+
+	g.seqNo = receipt.SeqNo
+	g.lastHash = lastHash
+	return receipt, nil
+}
+
+func (g *Generator) buildReceiptLocked(txID, policyID string, path *model.SCIONPath) (*model.ComplianceReceipt, []byte, error) {
+	nextSeq := g.seqNo + 1
 	receipt := &model.ComplianceReceipt{
 		ID:              uuid.New().String(),
 		TransactionID:   txID,
 		PolicyID:        policyID,
 		Path:            *path,
-		SeqNo:           g.seqNo,
+		SeqNo:           nextSeq,
 		Timestamp:       time.Now().UTC(),
 		OraclePublicKey: append([]byte(nil), g.publicKey...),
 		PreviousHash:    g.lastHash,
@@ -206,8 +236,7 @@ func (g *Generator) Issue(txID, policyID string, path *model.SCIONPath) (*model.
 	for _, hop := range path.Hops {
 		proof, err := g.proofs.BuildProof(hop)
 		if err != nil {
-			g.seqNo--
-			return nil, fmt.Errorf("building ISD proof for %s: %w", hop.IA, err)
+			return nil, nil, fmt.Errorf("building ISD proof for %s: %w", hop.IA, err)
 		}
 		receipt.ISDProofs = append(receipt.ISDProofs, proof)
 	}
@@ -215,26 +244,22 @@ func (g *Generator) Issue(txID, policyID string, path *model.SCIONPath) (*model.
 	// Sign the receipt
 	payload, err := marshalForSigning(receipt)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling receipt for signing: %w", err)
+		return nil, nil, fmt.Errorf("marshaling receipt for signing: %w", err)
 	}
 	receipt.Signature = ed25519.Sign(g.privateKey, payload)
 
 	if g.threshold != nil {
 		signatures, k, n, err := g.threshold.SignThreshold(payload)
 		if err != nil {
-			g.seqNo--
-			return nil, fmt.Errorf("threshold signing receipt: %w", err)
+			return nil, nil, fmt.Errorf("threshold signing receipt: %w", err)
 		}
 		receipt.ThresholdK = k
 		receipt.ThresholdN = n
 		receipt.ThresholdSignatures = signatures
 	}
 
-	// Update chain state
 	h := sha256.Sum256(receipt.Signature)
-	g.lastHash = h[:]
-
-	return receipt, nil
+	return receipt, h[:], nil
 }
 
 // SeedChain restores the hash chain state from the receipt store on startup.
