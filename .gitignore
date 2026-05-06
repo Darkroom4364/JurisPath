@@ -5,6 +5,8 @@ bin/
 .env
 .DS_Store
 .*-api-state
+deploy/crypto/
+deploy/topology/**/crypto/
 deploy/topology/isd-ch/gen/
 deploy/topology/isd-eu/gen/
 deploy/topology/isd-x/gen/

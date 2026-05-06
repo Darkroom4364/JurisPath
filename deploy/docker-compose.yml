@@ -1,19 +1,32 @@
-version: "3.9"
-
-# JurisPath 3-ISD SCION Topology
-# ═══════════════════════════════
+# JurisPath PoC compose stack
+#
+# Default startup runs only the JurisPath app in explicit-path demo mode:
+#   docker compose -f deploy/docker-compose.yml up --build jurispath
+#
+# Optional experimental 3-ISD SCION topology:
+#   ./deploy/scripts/gen-topo.sh
+#   docker compose -f deploy/docker-compose.yml --profile scion-topology up --build
+#
 # ISD-1 (CH):  AS 1-ff00:0:110 (core)   + AS 1-ff00:0:111 (non-core, validator)
 # ISD-2 (EU):  AS 2-ff00:0:210 (core)   + AS 2-ff00:0:211 (non-core, validator)
 # ISD-3 (X):   AS 3-ff00:0:310 (core)
-#
-# Pre-requisites:
-#   1. Build SCION base image:  docker build -f scion/Dockerfile.scion -t scion-base scion/
-#   2. Generate crypto:         ./scripts/gen-topo.sh
-#   3. Run:                     docker compose up
 
 x-scion-common: &scion-common
-  image: scion-base
+  build:
+    context: ./scion
+    dockerfile: Dockerfile.scion
+  image: jurispath-scion-base
   restart: unless-stopped
+  healthcheck:
+    test:
+      [
+        "CMD-SHELL",
+        "supervisorctl -c /etc/supervisor/conf.d/scion.conf status | grep -q 'scion-control.*RUNNING' && supervisorctl -c /etc/supervisor/conf.d/scion.conf status | grep -q 'scion-router.*RUNNING' && supervisorctl -c /etc/supervisor/conf.d/scion.conf status | grep -q 'scion-daemon.*RUNNING'"
+      ]
+    interval: 10s
+    timeout: 5s
+    retries: 12
+    start_period: 5s
   networks:
     - transit
 
@@ -21,6 +34,7 @@ services:
   # ── ISD-1 (CH) Core: AS 1-ff00:0:110 ──────────────────────────────────
   as110-ch-core:
     <<: *scion-common
+    profiles: ["scion-topology"]
     container_name: as110-ch-core
     hostname: as110
     networks:
@@ -39,6 +53,7 @@ services:
   # ── ISD-1 (CH) Non-core: AS 1-ff00:0:111 (validator) ──────────────────
   as111-ch-validator:
     <<: *scion-common
+    profiles: ["scion-topology"]
     container_name: as111-ch-validator
     hostname: as111
     networks:
@@ -54,6 +69,7 @@ services:
   # ── ISD-2 (EU) Core: AS 2-ff00:0:210 ──────────────────────────────────
   as210-eu-core:
     <<: *scion-common
+    profiles: ["scion-topology"]
     container_name: as210-eu-core
     hostname: as210
     networks:
@@ -69,6 +85,7 @@ services:
   # ── ISD-2 (EU) Non-core: AS 2-ff00:0:211 (validator) ──────────────────
   as211-eu-validator:
     <<: *scion-common
+    profiles: ["scion-topology"]
     container_name: as211-eu-validator
     hostname: as211
     networks:
@@ -84,6 +101,7 @@ services:
   # ── ISD-3 (X) Core: AS 3-ff00:0:310 ───────────────────────────────────
   as310-x-core:
     <<: *scion-common
+    profiles: ["scion-topology"]
     container_name: as310-x-core
     hostname: as310
     networks:
@@ -111,23 +129,27 @@ services:
     environment:
       JURISPATH_LISTEN: ":8080"
       JURISPATH_POLICY_DIR: /etc/jurispath/policies
+      JURISPATH_DASHBOARD_DIR: /opt/jurispath/dashboard
+      JURISPATH_VALIDATORS: /etc/jurispath/validators.yaml
+      JURISPATH_DATA_DIR: /var/lib/jurispath
       JURISPATH_INSECURE: "${JURISPATH_INSECURE:-true}"
       JURISPATH_TLS_CERT: "${JURISPATH_TLS_CERT:-}"
       JURISPATH_TLS_KEY: "${JURISPATH_TLS_KEY:-}"
       JURISPATH_API_TOKEN: "${JURISPATH_API_TOKEN:-}"
-      JURISPATH_UNAUTHENTICATED_API: "${JURISPATH_UNAUTHENTICATED_API:-false}"
-      # SCION daemon addresses for path queries
-      SCION_DAEMON_CH: "10.100.0.12:30255"
-      SCION_DAEMON_EU: "10.100.0.22:30255"
+      JURISPATH_UNAUTHENTICATED_API: "${JURISPATH_UNAUTHENTICATED_API:-true}"
+      JURISPATH_CLI_API_TOKEN: "${JURISPATH_API_TOKEN:-}"
+      JURISPATH_SCION_MODE: "${JURISPATH_SCION_MODE:-false}"
+      JURISPATH_SCION_DAEMON: "${JURISPATH_SCION_DAEMON:-127.0.0.1:30255}"
+      JURISPATH_VALIDATOR_ID: "${JURISPATH_VALIDATOR_ID:-}"
     networks:
       transit:
         ipv4_address: 10.100.0.100
-    depends_on:
-      - as110-ch-core
-      - as111-ch-validator
-      - as210-eu-core
-      - as211-eu-validator
-      - as310-x-core
+    healthcheck:
+      test: ["CMD", "jurispath", "health", "--base-url", "http://127.0.0.1:8080", "--output", "json"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
     restart: unless-stopped
 
 networks:

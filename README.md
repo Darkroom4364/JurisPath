@@ -123,9 +123,33 @@ make demo-tls
 ### Docker
 
 ```bash
-make up      # start
-make down    # stop
+make up             # app-only PoC startup
+make compose-smoke  # build/start app and verify health/policies
+make down           # stop
 ```
+
+The default Docker target runs JurisPath in explicit-path demo mode and does
+not require the experimental SCION topology. The packaged `validators.yaml`
+uses loopback validator addresses for this single-process PoC flow.
+
+For the optional 3-ISD SCION topology, generate crypto and enable the compose
+profile:
+
+```bash
+make topo
+make up-scion
+```
+
+To build the optional SCION profile, start all SCION services plus the app, and
+wait for health checks:
+
+```bash
+make compose-smoke-scion
+```
+
+The SCION image builds from the verified SCION v0.14.0 Debian release assets
+for `amd64` and `arm64`. Real SCION validator transport remains experimental
+and requires deliberate `JURISPATH_SCION_MODE=true` configuration.
 
 For Docker TLS mode with local development certs:
 
