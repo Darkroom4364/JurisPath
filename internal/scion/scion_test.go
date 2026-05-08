@@ -157,6 +157,12 @@ func TestBuildSCIONPath_ValidHops(t *testing.T) {
 	if p.Fingerprint != FingerprintHops(testHops) {
 		t.Fatalf("fingerprint mismatch")
 	}
+	if p.EvidenceClass != model.EvidenceClassExplicitDemo {
+		t.Fatalf("EvidenceClass = %q, want %q", p.EvidenceClass, model.EvidenceClassExplicitDemo)
+	}
+	if p.ProofStatus != model.ProofStatusUnverified {
+		t.Fatalf("ProofStatus = %q, want %q", p.ProofStatus, model.ProofStatusUnverified)
+	}
 }
 
 func TestBuildSCIONPath_EmptyHops(t *testing.T) {

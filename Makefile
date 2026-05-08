@@ -1,4 +1,4 @@
-.PHONY: help build test lint run run-tls demo demo-tls tls-cert docs-check-tls up up-scion up-tls up-tls-local compose-smoke compose-smoke-scion down topo clean
+.PHONY: help build test lint run run-tls demo demo-tls poc-metrics tls-cert docs-check-tls scion-image up up-scion up-tls up-tls-local compose-smoke compose-smoke-scion down topo clean
 
 GO := go
 
@@ -8,14 +8,16 @@ help:
 	@echo "  make run-tls      - local HTTPS startup (requires JURISPATH_TLS_CERT and JURISPATH_TLS_KEY)"
 	@echo "  make demo         - start local HTTP server and run demo scenarios"
 	@echo "  make demo-tls     - run demo scenarios against https://localhost:8080"
+	@echo "  make poc-metrics  - measure path-check, receipt, and chain-verification timings"
 	@echo "  make tls-cert     - generate local self-signed certs in deploy/certs"
 	@echo "  make docs-check-tls - verify TLS workflow docs stay aligned"
+	@echo "  make scion-image  - build optional SCION base image with scion-pki"
 	@echo "  make up           - docker compose app-only HTTP PoC startup (insecure=true)"
 	@echo "  make up-scion     - docker compose optional SCION topology profile"
 	@echo "  make up-tls       - docker compose TLS startup (requires JURISPATH_TLS_CERT and JURISPATH_TLS_KEY)"
 	@echo "  make up-tls-local - generate local certs and start compose TLS mode"
-	@echo "  make compose-smoke - build/start compose app and verify health/policies"
-	@echo "  make compose-smoke-scion - build/start optional SCION profile and app"
+	@echo "  make compose-smoke - build/start compose app and verify health/policies/demo"
+	@echo "  make compose-smoke-scion - build/start optional SCION profile processes"
 	@echo "  make down         - stop docker compose stack"
 
 build:
@@ -44,6 +46,9 @@ demo: build
 demo-tls: build
 	JURISPATH_CLI_BASE_URL=https://localhost:8080 JURISPATH_CLI_INSECURE_TLS=true ./bin/jurispath demo
 
+poc-metrics:
+	$(GO) run ./tools/pocmetrics
+
 tls-cert:
 	mkdir -p deploy/certs
 	openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
@@ -58,10 +63,14 @@ docs-check-tls:
 topo:
 	deploy/scripts/gen-topo.sh
 
+scion-image:
+	docker compose -f deploy/docker-compose.yml --profile scion-topology build as110-ch-core
+
 up:
 	JURISPATH_INSECURE=true JURISPATH_UNAUTHENTICATED_API=true docker compose -f deploy/docker-compose.yml up --build jurispath
 
-up-scion:
+up-scion: scion-image
+	$(MAKE) topo
 	docker compose -f deploy/docker-compose.yml --profile scion-topology up --build
 
 up-tls: check-tls-env
@@ -71,10 +80,11 @@ up-tls-local: tls-cert
 	JURISPATH_TLS_CERT=/certs/cert.pem JURISPATH_TLS_KEY=/certs/key.pem $(MAKE) up-tls
 
 compose-smoke:
-	@sh -c 'set -e; JURISPATH_INSECURE=true JURISPATH_UNAUTHENTICATED_API=true docker compose -f deploy/docker-compose.yml up -d --build jurispath; trap "docker compose -f deploy/docker-compose.yml down" EXIT; i=0; until docker compose -f deploy/docker-compose.yml exec -T jurispath jurispath health --base-url http://127.0.0.1:8080 --output json >/dev/null 2>&1; do i=$$((i+1)); if [ $$i -ge 60 ]; then echo "JurisPath compose app did not become ready"; docker compose -f deploy/docker-compose.yml logs jurispath; exit 1; fi; sleep 1; done; docker compose -f deploy/docker-compose.yml exec -T jurispath jurispath policies --base-url http://127.0.0.1:8080 --output json >/dev/null; echo "compose smoke passed"'
+	@sh -c 'set -e; JURISPATH_INSECURE=true JURISPATH_UNAUTHENTICATED_API=true docker compose -f deploy/docker-compose.yml up -d --build --force-recreate jurispath; trap "docker compose -f deploy/docker-compose.yml down" EXIT; i=0; until docker compose -f deploy/docker-compose.yml exec -T jurispath jurispath health --base-url http://127.0.0.1:8080 --output json >/dev/null 2>&1; do i=$$((i+1)); if [ $$i -ge 60 ]; then echo "JurisPath compose app did not become ready"; docker compose -f deploy/docker-compose.yml logs jurispath; exit 1; fi; sleep 1; done; docker compose -f deploy/docker-compose.yml exec -T jurispath jurispath policies --base-url http://127.0.0.1:8080 --output json >/dev/null; docker compose -f deploy/docker-compose.yml exec -T jurispath jurispath demo --base-url http://127.0.0.1:8080 >/dev/null; echo "compose smoke passed"'
 
-compose-smoke-scion: topo
-	@sh -c 'set -e; JURISPATH_INSECURE=true JURISPATH_UNAUTHENTICATED_API=true docker compose -f deploy/docker-compose.yml --profile scion-topology up -d --build --wait; trap "docker compose -f deploy/docker-compose.yml --profile scion-topology down" EXIT; docker compose -f deploy/docker-compose.yml exec -T jurispath jurispath health --base-url http://127.0.0.1:8080 --output json >/dev/null; docker compose -f deploy/docker-compose.yml exec -T jurispath jurispath policies --base-url http://127.0.0.1:8080 --output json >/dev/null; docker compose -f deploy/docker-compose.yml --profile scion-topology ps; echo "SCION profile compose smoke passed"'
+compose-smoke-scion: scion-image
+	@$(MAKE) topo
+	@sh -c 'set -e; JURISPATH_INSECURE=true JURISPATH_UNAUTHENTICATED_API=true JURISPATH_SCION_MODE=false docker compose -f deploy/docker-compose.yml --profile scion-topology up -d --build --wait; trap "docker compose -f deploy/docker-compose.yml --profile scion-topology down" EXIT; docker compose -f deploy/docker-compose.yml exec -T jurispath jurispath health --base-url http://127.0.0.1:8080 --output json >/dev/null; docker compose -f deploy/docker-compose.yml exec -T jurispath jurispath policies --base-url http://127.0.0.1:8080 --output json >/dev/null; docker compose -f deploy/docker-compose.yml --profile scion-topology ps; echo "SCION profile compose smoke passed"'
 
 down:
 	docker compose -f deploy/docker-compose.yml down

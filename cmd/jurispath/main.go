@@ -64,7 +64,7 @@ func runServer() int {
 	}
 	slog.Debug("configuration loaded", "listen", cfg.ListenAddr, "policy_dir", cfg.PolicyDir, "data_dir", cfg.DataDir, "log_level", cfg.LogLevel)
 
-	// Load jurisdiction policies
+	// Load corridor policies.
 	policies, err := policy.LoadAllFromDir(cfg.PolicyDir)
 	if err != nil {
 		slog.Error("failed to load policies", "dir", cfg.PolicyDir, "error", err)

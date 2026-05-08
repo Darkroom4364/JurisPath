@@ -2,12 +2,15 @@ package receipt
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jurispath/jurispath/pkg/model"
 )
@@ -246,6 +249,12 @@ func TestGenerator_IssueAndVerify(t *testing.T) {
 	if len(rcpt.Signature) == 0 {
 		t.Error("signature should not be empty")
 	}
+	if rcpt.EvidenceClass != model.EvidenceClassExplicitDemo {
+		t.Errorf("EvidenceClass = %q, want %q", rcpt.EvidenceClass, model.EvidenceClassExplicitDemo)
+	}
+	if rcpt.ProofStatus != model.ProofStatusUnverified {
+		t.Errorf("ProofStatus = %q, want %q", rcpt.ProofStatus, model.ProofStatusUnverified)
+	}
 
 	// Verify signature
 	valid, err := Verify(rcpt)
@@ -262,6 +271,80 @@ func TestGenerator_IssueAndVerify(t *testing.T) {
 	if valid {
 		t.Error("tampered receipt should not verify")
 	}
+}
+
+func TestVerify_AcceptsLegacyReceiptSignedWithoutEvidenceMetadata(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generating key: %v", err)
+	}
+	rcpt := &model.ComplianceReceipt{
+		ID:            "legacy-receipt",
+		TransactionID: "legacy-tx",
+		PolicyID:      "policy-v1",
+		Path: model.SCIONPath{
+			Raw:         []byte("legacy-raw-path"),
+			Fingerprint: "legacy-fp",
+		},
+		ISDProofs: []model.ISDProof{
+			{
+				IA:                 "1-ff00:0:110",
+				ISD:                1,
+				VerificationStatus: model.ProofStatusUnverified,
+				ProofSource:        "placeholder",
+			},
+		},
+		SeqNo:           1,
+		Timestamp:       time.Unix(1700000000, 0).UTC(),
+		OraclePublicKey: pub,
+	}
+	payload, err := legacySigningPayloadForTest(rcpt)
+	if err != nil {
+		t.Fatalf("marshaling legacy payload: %v", err)
+	}
+	rcpt.Signature = ed25519.Sign(priv, payload)
+
+	valid, err := Verify(rcpt)
+	if err != nil {
+		t.Fatalf("verifying legacy receipt: %v", err)
+	}
+	if !valid {
+		t.Fatal("legacy receipt should verify while evidence metadata is absent")
+	}
+
+	rcpt.EvidenceClass = model.EvidenceClassExplicitDemo
+	valid, err = Verify(rcpt)
+	if err != nil {
+		t.Fatalf("verifying mutated legacy receipt: %v", err)
+	}
+	if valid {
+		t.Fatal("legacy fallback should not verify after unsigned evidence metadata is added")
+	}
+}
+
+func legacySigningPayloadForTest(r *model.ComplianceReceipt) ([]byte, error) {
+	signable := struct {
+		ID            string           `json:"id"`
+		TransactionID string           `json:"transaction_id"`
+		PolicyID      string           `json:"policy_id"`
+		PathFP        string           `json:"path_fingerprint"`
+		PathRaw       []byte           `json:"path_raw,omitempty"`
+		SeqNo         uint64           `json:"seq_no"`
+		Timestamp     time.Time        `json:"timestamp"`
+		ISDProofs     []model.ISDProof `json:"isd_proofs"`
+		PreviousHash  []byte           `json:"previous_hash,omitempty"`
+	}{
+		ID:            r.ID,
+		TransactionID: r.TransactionID,
+		PolicyID:      r.PolicyID,
+		PathFP:        r.Path.Fingerprint,
+		PathRaw:       r.Path.Raw,
+		SeqNo:         r.SeqNo,
+		Timestamp:     r.Timestamp,
+		ISDProofs:     r.ISDProofs,
+		PreviousHash:  r.PreviousHash,
+	}
+	return json.Marshal(signable)
 }
 
 func TestGenerator_IssueAndAppendDoesNotAdvanceChainOnStoreFailure(t *testing.T) {
@@ -281,11 +364,15 @@ func TestGenerator_IssueAndAppendDoesNotAdvanceChainOnStoreFailure(t *testing.T)
 	if err == nil {
 		t.Fatal("expected append failure")
 	}
-	if failed == nil {
-		t.Fatal("expected tentative receipt on append failure")
+	if failed != nil {
+		t.Fatal("non-durable receipt should not be returned on append failure")
 	}
-	if failed.SeqNo != 1 {
-		t.Fatalf("failed receipt seq = %d, want 1", failed.SeqNo)
+	var appendErr *AppendError
+	if !errors.As(err, &appendErr) {
+		t.Fatalf("error = %T, want *AppendError", err)
+	}
+	if appendErr.ReceiptID == "" {
+		t.Fatal("expected append error to carry receipt id for audit")
 	}
 
 	store := NewMemoryStore()
@@ -405,6 +492,9 @@ func TestGenerator_IssueUsesConfiguredProofProvider(t *testing.T) {
 	if proof.ProofSource != "test-trc" {
 		t.Fatalf("ProofSource = %q, want test-trc", proof.ProofSource)
 	}
+	if rcpt.ProofStatus != model.ProofStatusVerified {
+		t.Fatalf("receipt ProofStatus = %q, want %q", rcpt.ProofStatus, model.ProofStatusVerified)
+	}
 	if len(proof.CertChain) == 0 {
 		t.Fatal("expected cert chain proof material")
 	}
@@ -441,6 +531,28 @@ func TestGenerator_LegacyProofMetadataOmittedFromSigningPayload(t *testing.T) {
 	}
 	if bytes.Contains(payload, []byte("proof_source")) {
 		t.Fatal("empty proof_source should be omitted from signing payload")
+	}
+}
+
+func TestAggregateProofStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		proofs []model.ISDProof
+		want   string
+	}{
+		{name: "none", want: model.ProofStatusUnverified},
+		{name: "verified", proofs: []model.ISDProof{{VerificationStatus: model.ProofStatusVerified}}, want: model.ProofStatusVerified},
+		{name: "unverified", proofs: []model.ISDProof{{VerificationStatus: model.ProofStatusUnverified}}, want: model.ProofStatusUnverified},
+		{name: "empty status", proofs: []model.ISDProof{{}}, want: model.ProofStatusUnverified},
+		{name: "mixed", proofs: []model.ISDProof{{VerificationStatus: model.ProofStatusVerified}, {VerificationStatus: model.ProofStatusUnverified}}, want: model.ProofStatusMixed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := aggregateProofStatus(tt.proofs); got != tt.want {
+				t.Fatalf("aggregateProofStatus() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -209,6 +209,36 @@ func TestSubmitTransactionIfAbsent_Duplicate(t *testing.T) {
 	if existing == nil {
 		t.Fatal("expected existing tx on duplicate submit")
 	}
+	existing.ReceiptID = "external-mutation"
+	if got := ledger.GetTransaction(tx.ID); got.ReceiptID == "external-mutation" {
+		t.Fatal("duplicate submit returned mutable ledger transaction")
+	}
+}
+
+func TestAttachReceiptUpdatesConfirmedTransactionUnderLedgerLock(t *testing.T) {
+	validators := testValidators()
+	ledger := NewLedger(validators)
+	engine := NewConsensusEngine(ledger, validators)
+
+	tx := &Transaction{ID: uuid.New().String(), From: "CH", To: "EU", Amount: 100, Currency: "CHF"}
+	if _, _, err := engine.SubmitAndRunRound(tx); err != nil {
+		t.Fatalf("SubmitAndRunRound: %v", err)
+	}
+
+	updated, err := ledger.AttachReceipt(tx.ID, "receipt-1")
+	if err != nil {
+		t.Fatalf("AttachReceipt: %v", err)
+	}
+	if updated.ReceiptID != "receipt-1" {
+		t.Fatalf("updated receipt id = %q, want receipt-1", updated.ReceiptID)
+	}
+	if got := ledger.GetTransaction(tx.ID); got == nil || got.ReceiptID != "receipt-1" {
+		t.Fatalf("ledger transaction = %+v, want receipt-1", got)
+	}
+
+	if _, err := ledger.AttachReceipt(tx.ID, "receipt-2"); err == nil {
+		t.Fatal("expected conflicting receipt attachment to fail")
+	}
 }
 
 func TestSubmitTransactionIfAbsent_AfterRejection(t *testing.T) {

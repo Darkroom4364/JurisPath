@@ -20,9 +20,8 @@ var (
 )
 
 var (
-	ErrDuplicateReceiptID     = errors.New("duplicate receipt id")
-	ErrDuplicateTransactionID = errors.New("duplicate transaction id")
-	ErrDuplicateSequence      = errors.New("duplicate receipt sequence")
+	ErrDuplicateReceiptID = errors.New("duplicate receipt id")
+	ErrDuplicateSequence  = errors.New("duplicate receipt sequence")
 )
 
 // Store is the interface for receipt persistence.
@@ -59,9 +58,6 @@ func (s *MemoryStore) Append(r *model.ComplianceReceipt) error {
 	defer s.mu.Unlock()
 	if _, ok := s.byID[r.ID]; ok {
 		return fmt.Errorf("%w: %s", ErrDuplicateReceiptID, r.ID)
-	}
-	if _, ok := s.byTxID[r.TransactionID]; ok {
-		return fmt.Errorf("%w: %s", ErrDuplicateTransactionID, r.TransactionID)
 	}
 	if _, ok := s.bySeq[r.SeqNo]; ok {
 		return fmt.Errorf("%w: %d", ErrDuplicateSequence, r.SeqNo)
@@ -185,9 +181,6 @@ func (s *BoltStore) Append(r *model.ComplianceReceipt) error {
 
 		if existing := receipts.Get([]byte(r.ID)); existing != nil {
 			return fmt.Errorf("%w: %s", ErrDuplicateReceiptID, r.ID)
-		}
-		if existing := byTx.Get([]byte(r.TransactionID)); existing != nil {
-			return fmt.Errorf("%w: %s", ErrDuplicateTransactionID, r.TransactionID)
 		}
 		seqKey := make([]byte, 8)
 		binary.BigEndian.PutUint64(seqKey, r.SeqNo)

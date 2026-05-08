@@ -28,6 +28,8 @@ func (d *Detector) Record(txID, policyID, violatedClause string, path *model.SCI
 		TransactionID:  txID,
 		PolicyID:       policyID,
 		Path:           *path,
+		EvidenceClass:  model.NormalizeEvidenceClass(path.EvidenceClass),
+		ProofStatus:    model.NormalizeProofStatus(path.ProofStatus),
 		ViolatedClause: violatedClause,
 		Severity:       classifySeverity(offending),
 		OffendingHops:  offending,

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,6 +44,13 @@ type persistentTestEnv struct {
 type failingAppendReceiptStore struct {
 	inner receipt.Store
 	err   error
+}
+
+type blockingAppendReceiptStore struct {
+	inner   receipt.Store
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
 }
 
 type failingProofProvider struct {
@@ -84,6 +92,38 @@ func (s *failingAppendReceiptStore) Last() (*model.ComplianceReceipt, error) {
 }
 
 func (s *failingAppendReceiptStore) ListRange(fromSeq, toSeq uint64) ([]*model.ComplianceReceipt, error) {
+	return s.inner.ListRange(fromSeq, toSeq)
+}
+
+func (s *blockingAppendReceiptStore) Append(r *model.ComplianceReceipt) error {
+	s.once.Do(func() {
+		close(s.entered)
+		<-s.release
+	})
+	return s.inner.Append(r)
+}
+
+func (s *blockingAppendReceiptStore) GetByTxID(txID string) (*model.ComplianceReceipt, error) {
+	return s.inner.GetByTxID(txID)
+}
+
+func (s *blockingAppendReceiptStore) GetByID(id string) (*model.ComplianceReceipt, error) {
+	return s.inner.GetByID(id)
+}
+
+func (s *blockingAppendReceiptStore) List() ([]*model.ComplianceReceipt, error) {
+	return s.inner.List()
+}
+
+func (s *blockingAppendReceiptStore) Count() (int, error) {
+	return s.inner.Count()
+}
+
+func (s *blockingAppendReceiptStore) Last() (*model.ComplianceReceipt, error) {
+	return s.inner.Last()
+}
+
+func (s *blockingAppendReceiptStore) ListRange(fromSeq, toSeq uint64) ([]*model.ComplianceReceipt, error) {
 	return s.inner.ListRange(fromSeq, toSeq)
 }
 
@@ -1123,8 +1163,8 @@ func TestReceiptPersistenceFailureAudits(t *testing.T) {
 					t.Fatalf("expected consensus.confirmed=true, got %v", result["consensus"])
 				}
 				compliance, ok := result["compliance"].(map[string]any)
-				if !ok || compliance["receipt"] == nil {
-					t.Fatalf("expected compliance receipt in response, got %v", result["compliance"])
+				if !ok || compliance["receipt"] != nil {
+					t.Fatalf("expected no non-durable compliance receipt in response, got %v", result["compliance"])
 				}
 				if result["receipt_persisted"] != false {
 					t.Fatalf("expected receipt_persisted=false, got %v", result["receipt_persisted"])
@@ -1206,6 +1246,295 @@ func TestSettleIdempotentRetryReturnsOriginalReceipt(t *testing.T) {
 	}
 }
 
+func TestSettleRetryUsesLedgerReceiptAfterPreflightCheck(t *testing.T) {
+	env := setupTestEnv(t)
+	txID := "tx-shared-preflight"
+
+	resp, check := postCheck(t, env.server.URL, CheckRequest{
+		TransactionID: txID,
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("preflight check expected 200, got %d: %v", resp.StatusCode, check)
+	}
+	checkReceipt := check["receipt"].(map[string]any)
+
+	req := SettleRequest{
+		TransactionID: txID,
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	}
+	resp, settled := postSettle(t, env.server.URL, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("settle expected 200, got %d: %v", resp.StatusCode, settled)
+	}
+	settlementReceipt := settled["compliance"].(map[string]any)["receipt"].(map[string]any)
+	if settlementReceipt["id"] == checkReceipt["id"] {
+		t.Fatalf("settlement reused preflight receipt %v", settlementReceipt["id"])
+	}
+	tx := env.ledger.GetTransaction(txID)
+	if tx == nil || tx.ReceiptID != settlementReceipt["id"] {
+		t.Fatalf("ledger receipt id = %v, want settlement receipt %v", tx, settlementReceipt["id"])
+	}
+
+	resp, retry := postSettle(t, env.server.URL, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("retry expected 200, got %d: %v", resp.StatusCode, retry)
+	}
+	if retry["idempotent"] != true {
+		t.Fatalf("expected idempotent retry, got %v", retry["idempotent"])
+	}
+	retryReceipt := retry["compliance"].(map[string]any)["receipt"].(map[string]any)
+	if retryReceipt["id"] != settlementReceipt["id"] {
+		t.Fatalf("retry receipt id = %v, want settlement receipt %v", retryReceipt["id"], settlementReceipt["id"])
+	}
+	if count, err := env.api.receipts.Count(); err != nil || count != 2 {
+		t.Fatalf("receipt count = %d, err=%v; want check + settlement receipts", count, err)
+	}
+}
+
+func TestSettleIdempotentRetryBypassesCurrentPolicyAndExtractor(t *testing.T) {
+	env := setupTestEnv(t)
+	req := SettleRequest{
+		TransactionID: "tx-historical-retry",
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	}
+
+	resp, first := postSettle(t, env.server.URL, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first settle expected 200, got %d: %v", resp.StatusCode, first)
+	}
+	firstReceipt := first["compliance"].(map[string]any)["receipt"].(map[string]any)
+
+	delete(env.api.checkers, "test-policy")
+	env.api.extractor = rejectingPathExtractor{}
+
+	resp, retry := postSettle(t, env.server.URL, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("historical retry expected 200, got %d: %v", resp.StatusCode, retry)
+	}
+	if retry["idempotent"] != true {
+		t.Fatalf("expected idempotent=true, got %v", retry["idempotent"])
+	}
+	retryReceipt := retry["compliance"].(map[string]any)["receipt"].(map[string]any)
+	if retryReceipt["id"] != firstReceipt["id"] {
+		t.Fatalf("retry receipt id = %v, want original %v", retryReceipt["id"], firstReceipt["id"])
+	}
+
+	conflicting := req
+	conflicting.Amount = 101
+	resp, result := postSettle(t, env.server.URL, conflicting)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("conflicting historical retry expected 409, got %d: %v", resp.StatusCode, result)
+	}
+	if result["code"] != "TX_CONFLICT" {
+		t.Fatalf("expected TX_CONFLICT, got %v", result["code"])
+	}
+}
+
+func TestSettleLegacyRetryRequiresStoredPathFingerprint(t *testing.T) {
+	env := setupTestEnv(t)
+	rawPath := compliantPath(t)
+	path, err := scion.BuildSCIONPath(&scion.MockPathExtractor{}, rawPath)
+	if err != nil {
+		t.Fatalf("building path: %v", err)
+	}
+	req := SettleRequest{
+		TransactionID: "tx-legacy-path",
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       rawPath,
+	}
+	commitLegacyTransaction(t, env.ledger, req, path.Fingerprint)
+
+	conflicting := req
+	conflicting.RawPath = alternateCompliantPath(t)
+	resp, result := postSettle(t, env.server.URL, conflicting)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("legacy path mismatch expected 409, got %d: %v", resp.StatusCode, result)
+	}
+	if result["code"] != "TX_CONFLICT" {
+		t.Fatalf("expected TX_CONFLICT, got %v", result["code"])
+	}
+	if count, err := env.api.receipts.Count(); err != nil || count != 0 {
+		t.Fatalf("receipt count after conflict = %d, err=%v; want 0", count, err)
+	}
+
+	resp, repaired := postSettle(t, env.server.URL, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("legacy matching retry expected 200, got %d: %v", resp.StatusCode, repaired)
+	}
+	if repaired["idempotent"] != true {
+		t.Fatalf("expected idempotent=true, got %v", repaired["idempotent"])
+	}
+	if repaired["receipt_persisted"] != true {
+		t.Fatalf("expected receipt_persisted=true, got %v", repaired["receipt_persisted"])
+	}
+	if count, err := env.api.receipts.Count(); err != nil || count != 1 {
+		t.Fatalf("receipt count after repair = %d, err=%v; want 1", count, err)
+	}
+	tx := env.ledger.GetTransaction(req.TransactionID)
+	if tx == nil || tx.ReceiptID == "" {
+		t.Fatalf("expected repaired legacy tx to have attached receipt, got %+v", tx)
+	}
+	if got := env.ledger.GetBalance("CH", "CHF"); got != 9900 {
+		t.Fatalf("CH balance after legacy retry = %d, want 9900", got)
+	}
+}
+
+func TestSettleLegacyRetryWithoutPathFingerprintDoesNotMintReceipt(t *testing.T) {
+	env := setupTestEnv(t)
+	req := SettleRequest{
+		TransactionID: "tx-legacy-no-path",
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	}
+	commitLegacyTransaction(t, env.ledger, req, "")
+
+	resp, result := postSettle(t, env.server.URL, req)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("legacy repair without fingerprint expected 500, got %d: %v", resp.StatusCode, result)
+	}
+	if result["code"] != "SETTLEMENT_RECEIPT_MISSING" {
+		t.Fatalf("expected SETTLEMENT_RECEIPT_MISSING, got %v", result["code"])
+	}
+	if result["receipt_persisted"] != false {
+		t.Fatalf("expected receipt_persisted=false, got %v", result["receipt_persisted"])
+	}
+	if count, err := env.api.receipts.Count(); err != nil || count != 0 {
+		t.Fatalf("receipt count = %d, err=%v; want 0", count, err)
+	}
+	if got := env.ledger.GetBalance("CH", "CHF"); got != 9900 {
+		t.Fatalf("CH balance after failed legacy repair = %d, want 9900", got)
+	}
+}
+
+func commitLegacyTransaction(t *testing.T, ledger *dlt.Ledger, req SettleRequest, pathFingerprint string) {
+	t.Helper()
+	if err := ledger.SubmitTransaction(&dlt.Transaction{
+		ID:              req.TransactionID,
+		From:            req.From,
+		To:              req.To,
+		Amount:          req.Amount,
+		Currency:        req.Currency,
+		PolicyID:        req.PolicyID,
+		PathFingerprint: pathFingerprint,
+	}); err != nil {
+		t.Fatalf("submit legacy tx: %v", err)
+	}
+	if err := ledger.Commit(&dlt.ConsensusMessage{TxID: req.TransactionID}); err != nil {
+		t.Fatalf("commit legacy tx: %v", err)
+	}
+}
+
+func TestSettleConcurrentRetryWaitsForDurableReceipt(t *testing.T) {
+	store := &blockingAppendReceiptStore{
+		inner:   receipt.NewMemoryStore(),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	env := setupTestEnvWithReceiptStore(t, store)
+	req := SettleRequest{
+		TransactionID: "tx-concurrent-retry",
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	}
+
+	type result struct {
+		status int
+		body   map[string]any
+		err    error
+	}
+	post := func() result {
+		body, err := json.Marshal(req)
+		if err != nil {
+			return result{err: err}
+		}
+		resp, err := http.Post(env.server.URL+"/api/settle", "application/json", bytes.NewReader(body))
+		if err != nil {
+			return result{err: err}
+		}
+		defer resp.Body.Close()
+		var decoded map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+			return result{status: resp.StatusCode, err: err}
+		}
+		return result{status: resp.StatusCode, body: decoded}
+	}
+
+	firstCh := make(chan result, 1)
+	go func() {
+		firstCh <- post()
+	}()
+
+	select {
+	case <-store.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first settlement to enter receipt append")
+	}
+
+	retryCh := make(chan result, 1)
+	go func() {
+		retryCh <- post()
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	close(store.release)
+
+	var first, retry result
+	select {
+	case first = <-firstCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first settlement")
+	}
+	select {
+	case retry = <-retryCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for retry settlement")
+	}
+	if first.err != nil {
+		t.Fatalf("first settlement error: %v", first.err)
+	}
+	if retry.err != nil {
+		t.Fatalf("retry settlement error: %v", retry.err)
+	}
+	if first.status != http.StatusOK {
+		t.Fatalf("first settlement expected 200, got %d: %v", first.status, first.body)
+	}
+	if retry.status != http.StatusOK {
+		t.Fatalf("retry settlement expected 200, got %d: %v", retry.status, retry.body)
+	}
+	firstReceipt := first.body["compliance"].(map[string]any)["receipt"].(map[string]any)
+	retryReceipt := retry.body["compliance"].(map[string]any)["receipt"].(map[string]any)
+	if retryReceipt["id"] != firstReceipt["id"] {
+		t.Fatalf("retry receipt id = %v, want %v", retryReceipt["id"], firstReceipt["id"])
+	}
+	if count, err := env.api.receipts.Count(); err != nil || count != 1 {
+		t.Fatalf("receipt count = %d, err=%v; want 1", count, err)
+	}
+}
+
 func TestSettleDuplicateMismatchedPayloadConflicts(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1271,11 +1600,7 @@ func TestCanonicalSettleRequestDigestCoversSettlementPolicyAndPath(t *testing.T)
 		PolicyID:      "test-policy",
 		RawPath:       compliantPath(t),
 	}
-	path, err := scion.BuildSCIONPath(&scion.MockPathExtractor{}, base.RawPath)
-	if err != nil {
-		t.Fatalf("building path: %v", err)
-	}
-	baseDigest, err := canonicalSettleRequestDigest(base, base.TransactionID, path)
+	baseDigest, err := canonicalSettleRequestDigest(base, base.TransactionID)
 	if err != nil {
 		t.Fatalf("base digest: %v", err)
 	}
@@ -1308,11 +1633,7 @@ func TestCanonicalSettleRequestDigestCoversSettlementPolicyAndPath(t *testing.T)
 		t.Run(tt.name, func(t *testing.T) {
 			changed := base
 			tt.mutate(&changed)
-			changedPath, err := scion.BuildSCIONPath(&scion.MockPathExtractor{}, changed.RawPath)
-			if err != nil {
-				t.Fatalf("building changed path: %v", err)
-			}
-			changedDigest, err := canonicalSettleRequestDigest(changed, changed.TransactionID, changedPath)
+			changedDigest, err := canonicalSettleRequestDigest(changed, changed.TransactionID)
 			if err != nil {
 				t.Fatalf("changed digest: %v", err)
 			}
@@ -1338,7 +1659,7 @@ func TestSettleDuplicatePendingReturnsConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("building path: %v", err)
 	}
-	digest, err := canonicalSettleRequestDigest(req, req.TransactionID, path)
+	digest, err := canonicalSettleRequestDigest(req, req.TransactionID)
 	if err != nil {
 		t.Fatalf("digest: %v", err)
 	}
@@ -1484,6 +1805,76 @@ func TestCheckCompliantPath(t *testing.T) {
 	}
 	if result["receipt"] == nil {
 		t.Fatal("expected a receipt in response")
+	}
+}
+
+func TestCheckWithoutTransactionIDAssignsUniqueReceiptIDs(t *testing.T) {
+	env := setupTestEnv(t)
+	req := CheckRequest{
+		PolicyID: "test-policy",
+		RawPath:  compliantPath(t),
+	}
+
+	resp, first := postCheck(t, env.server.URL, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first check expected 200, got %d: %v", resp.StatusCode, first)
+	}
+	resp, second := postCheck(t, env.server.URL, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second check expected 200, got %d: %v", resp.StatusCode, second)
+	}
+
+	firstReceipt := first["receipt"].(map[string]any)
+	secondReceipt := second["receipt"].(map[string]any)
+	if firstReceipt["transaction_id"] == "" || secondReceipt["transaction_id"] == "" {
+		t.Fatalf("expected generated transaction IDs, got %v and %v", firstReceipt["transaction_id"], secondReceipt["transaction_id"])
+	}
+	if firstReceipt["transaction_id"] == secondReceipt["transaction_id"] {
+		t.Fatalf("expected unique generated transaction IDs, got %v", firstReceipt["transaction_id"])
+	}
+	if count, err := env.api.receipts.Count(); err != nil || count != 2 {
+		t.Fatalf("receipt count = %d, err=%v; want 2", count, err)
+	}
+}
+
+func TestCheckRejectsExistingSettlementTransactionID(t *testing.T) {
+	env := setupTestEnv(t)
+	txID := "tx-check-after-settle"
+	settleReq := SettleRequest{
+		TransactionID: txID,
+		From:          "CH",
+		To:            "EU",
+		Amount:        100,
+		Currency:      "CHF",
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	}
+	resp, settled := postSettle(t, env.server.URL, settleReq)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("settle expected 200, got %d: %v", resp.StatusCode, settled)
+	}
+	settlementReceipt := settled["compliance"].(map[string]any)["receipt"].(map[string]any)
+
+	resp, result := postCheck(t, env.server.URL, CheckRequest{
+		TransactionID: txID,
+		PolicyID:      "test-policy",
+		RawPath:       compliantPath(t),
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("check with settlement tx ID expected 409, got %d: %v", resp.StatusCode, result)
+	}
+	if result["code"] != "TX_ID_RESERVED" {
+		t.Fatalf("expected TX_ID_RESERVED, got %v", result["code"])
+	}
+	if count, err := env.api.receipts.Count(); err != nil || count != 1 {
+		t.Fatalf("receipt count = %d, err=%v; want 1", count, err)
+	}
+	byTx, err := env.api.receipts.GetByTxID(txID)
+	if err != nil {
+		t.Fatalf("GetByTxID: %v", err)
+	}
+	if byTx == nil || byTx.ID != settlementReceipt["id"] {
+		t.Fatalf("GetByTxID returned %+v, want settlement receipt %v", byTx, settlementReceipt["id"])
 	}
 }
 

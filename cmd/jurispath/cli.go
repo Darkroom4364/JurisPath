@@ -101,7 +101,7 @@ func (opts *cliOptions) newRootCmd() *cobra.Command {
 
 	root := &cobra.Command{
 		Use:           "jurispath",
-		Short:         "JurisPath compliance oracle server and CLI",
+		Short:         "JurisPath path-policy oracle server and CLI",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -186,7 +186,7 @@ func (opts *cliOptions) newHealthCmd() *cobra.Command {
 func (opts *cliOptions) newPoliciesCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "policies",
-		Short:   "List loaded compliance policies",
+		Short:   "List loaded corridor policies",
 		Args:    cobra.NoArgs,
 		Example: `  jurispath policies`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -198,7 +198,7 @@ func (opts *cliOptions) newPoliciesCmd() *cobra.Command {
 func (opts *cliOptions) newReceiptsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "receipts",
-		Short:   "List compliance receipts",
+		Short:   "List path-policy receipts",
 		Args:    cobra.NoArgs,
 		Example: `  jurispath receipts -o json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -210,7 +210,7 @@ func (opts *cliOptions) newReceiptsCmd() *cobra.Command {
 func (opts *cliOptions) newViolationsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "violations",
-		Short:   "List compliance violations",
+		Short:   "List path-policy violations",
 		Args:    cobra.NoArgs,
 		Example: `  jurispath violations`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -251,7 +251,7 @@ func (opts *cliOptions) newCheckCmd() *cobra.Command {
 	var txID, policyID, pathSpec string
 	cmd := &cobra.Command{
 		Use:   "check",
-		Short: "Check whether a path complies with a policy",
+		Short: "Check whether path metadata matches a corridor policy",
 		Args:  cobra.NoArgs,
 		Example: `  jurispath check --policy eu-only --path "1-ff00:0:110,2-ff00:0:210"
   jurispath check --tx tx-123 --policy eu-only --path "1-ff00:0:110,2-ff00:0:210"`,
@@ -264,7 +264,7 @@ func (opts *cliOptions) newCheckCmd() *cobra.Command {
 			return opts.postJSON("/api/check", req)
 		},
 	}
-	cmd.Flags().StringVar(&txID, "tx", "", "transaction ID")
+	cmd.Flags().StringVar(&txID, "tx", "", "transaction ID (optional; server assigns one when omitted)")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy ID")
 	cmd.Flags().StringVar(&pathSpec, "path", "", "comma-separated IA path, e.g. 1-ff00:0:110,2-ff00:0:210")
 	_ = cmd.MarkFlagRequired("policy")
@@ -422,7 +422,7 @@ func (opts *cliOptions) newSettleCmd() *cobra.Command {
 			return opts.postJSON("/api/settle", req)
 		},
 	}
-	cmd.Flags().StringVar(&txID, "tx", "", "transaction ID")
+	cmd.Flags().StringVar(&txID, "tx", "", "transaction ID (optional idempotency key)")
 	cmd.Flags().StringVar(&from, "from", "", "source validator/account")
 	cmd.Flags().StringVar(&to, "to", "", "destination validator/account")
 	cmd.Flags().Int64Var(&amount, "amount", 0, "settlement amount")
@@ -442,7 +442,7 @@ func (opts *cliOptions) newFilterPathsCmd() *cobra.Command {
 	var policyID, pathSpecs string
 	cmd := &cobra.Command{
 		Use:     "filter-paths",
-		Short:   "Filter candidate SCION paths by policy compliance",
+		Short:   "Filter candidate SCION-style paths by corridor policy",
 		Args:    cobra.NoArgs,
 		Example: `  jurispath filter-paths --policy chf-eur-settlement-v1 --paths "1-ff00:0:110,2-ff00:0:210;1-ff00:0:110,3-ff00:0:310"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -539,6 +539,7 @@ func (opts *cliOptions) demoSettle(txID, from, to string, amount int64, currency
 	if status == http.StatusUnprocessableEntity && result.Compliance != nil && result.Compliance.Violation != nil {
 		fmt.Fprintf(opts.out, "  SETTLEMENT BLOCKED - %s\n", result.Compliance.Violation.ViolatedClause)
 		fmt.Fprintf(opts.out, "  Severity: %s, offending hops: %d\n", result.Compliance.Violation.Severity, len(result.Compliance.Violation.OffendingHops))
+		fmt.Fprintf(opts.out, "  Evidence: %s, proof: %s\n", result.Compliance.Violation.EvidenceClass, result.Compliance.Violation.ProofStatus)
 		return nil
 	}
 	if status != http.StatusOK {
@@ -548,11 +549,13 @@ func (opts *cliOptions) demoSettle(txID, from, to string, amount int64, currency
 		return fmt.Errorf("settlement was not confirmed")
 	}
 	if result.Compliance == nil || !result.Compliance.Compliant || result.Compliance.Receipt == nil {
-		return fmt.Errorf("settlement response missing compliance receipt")
+		return fmt.Errorf("settlement response missing path-policy receipt")
 	}
 	fmt.Fprintf(opts.out, "  SETTLED - %s -> %s %d %s\n", from, to, amount, currency)
 	fmt.Fprintf(opts.out, "  Consensus confirmed in round %d\n", result.Consensus.Round)
 	fmt.Fprintf(opts.out, "  Receipt ID: %s, seq #%d\n", result.Compliance.Receipt.ID, result.Compliance.Receipt.SeqNo)
+	fmt.Fprintf(opts.out, "  Evidence: %s, proof: %s\n", result.Compliance.Receipt.EvidenceClass, result.Compliance.Receipt.ProofStatus)
+	fmt.Fprintf(opts.out, "  Path fingerprint: %s\n", result.Compliance.Receipt.Path.Fingerprint)
 	if result.ReceiptPersisted != nil && !*result.ReceiptPersisted {
 		fmt.Fprintf(opts.out, "  Persistence warning: %s\n", result.PersistenceWarning)
 	}

@@ -12,6 +12,8 @@ type ComplianceReceipt struct {
 	TransactionID       string               `json:"transaction_id"`
 	PolicyID            string               `json:"policy_id"`
 	Path                SCIONPath            `json:"path"`
+	EvidenceClass       string               `json:"evidence_class"`
+	ProofStatus         string               `json:"proof_status"`
 	ISDProofs           []ISDProof           `json:"isd_proofs"`
 	SeqNo               uint64               `json:"seq_no"`
 	Timestamp           time.Time            `json:"timestamp"`
@@ -48,6 +50,8 @@ type Violation struct {
 	TransactionID  string    `json:"transaction_id"`
 	PolicyID       string    `json:"policy_id"`
 	Path           SCIONPath `json:"path"`
+	EvidenceClass  string    `json:"evidence_class"`
+	ProofStatus    string    `json:"proof_status"`
 	ViolatedClause string    `json:"violated_clause"`
 	Severity       string    `json:"severity"` // "critical", "high", "medium"
 	OffendingHops  []ASHop   `json:"offending_hops"`

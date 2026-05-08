@@ -19,6 +19,14 @@ type Ledger struct {
 	currentRound uint64
 }
 
+func cloneTransaction(tx *Transaction) *Transaction {
+	if tx == nil {
+		return nil
+	}
+	cp := *tx
+	return &cp
+}
+
 // NewLedger creates a ledger seeded with the given validator states.
 func NewLedger(validators []ValidatorState) *Ledger {
 	l := &Ledger{
@@ -62,10 +70,10 @@ func (l *Ledger) SubmitTransactionIfAbsent(tx *Transaction) (*Transaction, error
 
 	if l.seen[tx.ID] {
 		if existing, ok := l.confirmed[tx.ID]; ok {
-			return existing, nil
+			return cloneTransaction(existing), nil
 		}
 		if existing, ok := l.pending[tx.ID]; ok {
-			return existing, nil
+			return cloneTransaction(existing), nil
 		}
 		return &Transaction{ID: tx.ID, Status: TxRejected}, nil
 	}
@@ -216,6 +224,30 @@ func (l *Ledger) Commit(msg *ConsensusMessage) error {
 	return nil
 }
 
+// AttachReceipt records the durable settlement receipt for a confirmed
+// transaction. The ledger owns this mutation so readers observe it under the
+// same lock used for transaction lifecycle changes.
+func (l *Ledger) AttachReceipt(txID, receiptID string) (*Transaction, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	tx, ok := l.confirmed[txID]
+	if !ok {
+		if _, pending := l.pending[txID]; pending {
+			return nil, fmt.Errorf("transaction %s is pending", txID)
+		}
+		return nil, fmt.Errorf("confirmed transaction %s not found", txID)
+	}
+	if tx.ReceiptID != "" {
+		if tx.ReceiptID != receiptID {
+			return cloneTransaction(tx), fmt.Errorf("transaction %s already has receipt %s", txID, tx.ReceiptID)
+		}
+		return cloneTransaction(tx), nil
+	}
+	tx.ReceiptID = receiptID
+	return cloneTransaction(tx), nil
+}
+
 // GetBalance returns the balance for a given validator and currency.
 func (l *Ledger) GetBalance(validatorID, currency string) int64 {
 	l.mu.RLock()
@@ -234,12 +266,10 @@ func (l *Ledger) GetTransaction(txID string) *Transaction {
 	defer l.mu.RUnlock()
 
 	if tx, ok := l.confirmed[txID]; ok {
-		cp := *tx
-		return &cp
+		return cloneTransaction(tx)
 	}
 	if tx, ok := l.pending[txID]; ok {
-		cp := *tx
-		return &cp
+		return cloneTransaction(tx)
 	}
 	return nil
 }
@@ -251,8 +281,7 @@ func (l *Ledger) ListTransactions() []*Transaction {
 
 	out := make([]*Transaction, len(l.allTxs))
 	for i, tx := range l.allTxs {
-		cp := *tx
-		out[i] = &cp
+		out[i] = cloneTransaction(tx)
 	}
 	return out
 }
