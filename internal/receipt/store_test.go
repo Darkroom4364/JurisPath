@@ -196,11 +196,6 @@ func TestMemoryStore_RejectsDuplicates(t *testing.T) {
 			want: receipt.ErrDuplicateReceiptID,
 		},
 		{
-			name: "transaction id",
-			next: makeReceiptWithSeq("r2", "tx1", 2),
-			want: receipt.ErrDuplicateTransactionID,
-		},
-		{
 			name: "sequence",
 			next: makeReceiptWithSeq("r2", "tx2", 1),
 			want: receipt.ErrDuplicateSequence,
@@ -233,11 +228,6 @@ func TestBoltStore_RejectsDuplicates(t *testing.T) {
 			want: receipt.ErrDuplicateReceiptID,
 		},
 		{
-			name: "transaction id",
-			next: makeReceiptWithSeq("r2", "tx1", 2),
-			want: receipt.ErrDuplicateTransactionID,
-		},
-		{
 			name: "sequence",
 			next: makeReceiptWithSeq("r2", "tx2", 1),
 			want: receipt.ErrDuplicateSequence,
@@ -262,4 +252,52 @@ func TestBoltStore_RejectsDuplicates(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStores_AllowDuplicateTransactionIDs(t *testing.T) {
+	t.Run("memory", func(t *testing.T) {
+		store := receipt.NewMemoryStore()
+		if err := store.Append(makeReceiptWithSeq("r1", "tx1", 1)); err != nil {
+			t.Fatalf("Append first: %v", err)
+		}
+		if err := store.Append(makeReceiptWithSeq("r2", "tx1", 2)); err != nil {
+			t.Fatalf("Append duplicate tx id: %v", err)
+		}
+		if count, err := store.Count(); err != nil || count != 2 {
+			t.Fatalf("Count = %d, err=%v; want 2", count, err)
+		}
+		got, err := store.GetByTxID("tx1")
+		if err != nil {
+			t.Fatalf("GetByTxID: %v", err)
+		}
+		if got == nil || got.ID != "r2" {
+			t.Fatalf("GetByTxID returned %+v, want latest receipt r2", got)
+		}
+	})
+
+	t.Run("bolt", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "receipts.db")
+		store, err := receipt.NewBoltStore(dbPath)
+		if err != nil {
+			t.Fatalf("NewBoltStore: %v", err)
+		}
+		defer store.Close()
+
+		if err := store.Append(makeReceiptWithSeq("r1", "tx1", 1)); err != nil {
+			t.Fatalf("Append first: %v", err)
+		}
+		if err := store.Append(makeReceiptWithSeq("r2", "tx1", 2)); err != nil {
+			t.Fatalf("Append duplicate tx id: %v", err)
+		}
+		if count, err := store.Count(); err != nil || count != 2 {
+			t.Fatalf("Count = %d, err=%v; want 2", count, err)
+		}
+		got, err := store.GetByTxID("tx1")
+		if err != nil {
+			t.Fatalf("GetByTxID: %v", err)
+		}
+		if got == nil || got.ID != "r2" {
+			t.Fatalf("GetByTxID returned %+v, want latest receipt r2", got)
+		}
+	})
 }

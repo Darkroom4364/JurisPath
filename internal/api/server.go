@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -91,6 +92,7 @@ type Server struct {
 	extractor     scion.PathExtractor
 	ledger        *dlt.Ledger
 	consensus     *dlt.ConsensusEngine
+	receiptMu     sync.Mutex
 	auditLog      *audit.AuditLog
 	auditCh       chan audit.AuditEntry
 	auditFailures atomic.Uint64
@@ -229,6 +231,11 @@ func (s *Server) audit(eventType string, details any) {
 }
 
 func (s *Server) auditReceiptPersistenceFailure(context string, txID, policyID, receiptID string, err error) {
+	errMsg := err.Error()
+	var appendErr *receipt.AppendError
+	if errors.As(err, &appendErr) && appendErr.Err != nil {
+		errMsg = appendErr.Err.Error()
+	}
 	s.audit("receipt_persist_failure", map[string]any{
 		"context":    context,
 		"tx_id":      txID,
@@ -236,8 +243,16 @@ func (s *Server) auditReceiptPersistenceFailure(context string, txID, policyID, 
 		"receipt_id": receiptID,
 		"outcome":    "error",
 		"code":       "RECEIPT_PERSISTENCE_FAILED",
-		"error":      err.Error(),
+		"error":      errMsg,
 	})
+}
+
+func receiptIDFromError(err error) string {
+	var appendErr *receipt.AppendError
+	if errors.As(err, &appendErr) {
+		return appendErr.ReceiptID
+	}
+	return ""
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -318,52 +333,65 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Debug("compliance check requested", "tx_id", req.TransactionID, "policy_id", req.PolicyID)
+	txID := req.TransactionID
+	if txID == "" {
+		txID = uuid.New().String()
+	}
+
+	slog.Debug("compliance check requested", "tx_id", txID, "policy_id", req.PolicyID)
+	if req.TransactionID != "" {
+		if existing := s.ledger.GetTransaction(txID); existing != nil {
+			slog.Warn("check request reused settlement transaction ID", "tx_id", txID, "status", existing.Status)
+			s.audit("check", map[string]any{"tx_id": txID, "policy_id": req.PolicyID, "outcome": "error", "code": "TX_ID_RESERVED"})
+			writeError(w, http.StatusConflict, "TX_ID_RESERVED", fmt.Sprintf("transaction ID %s is already used by the settlement ledger", txID))
+			return
+		}
+	}
 
 	checker, ok := s.checkers[req.PolicyID]
 	if !ok {
-		slog.Warn("unknown policy in check request", "policy_id", req.PolicyID, "tx_id", req.TransactionID)
-		s.audit("check", map[string]any{"tx_id": req.TransactionID, "policy_id": req.PolicyID, "outcome": "error", "code": "UNKNOWN_POLICY"})
+		slog.Warn("unknown policy in check request", "policy_id", req.PolicyID, "tx_id", txID)
+		s.audit("check", map[string]any{"tx_id": txID, "policy_id": req.PolicyID, "outcome": "error", "code": "UNKNOWN_POLICY"})
 		writeError(w, http.StatusBadRequest, "UNKNOWN_POLICY", fmt.Sprintf("unknown policy: %s", req.PolicyID))
 		return
 	}
 
 	path, err := scion.BuildSCIONPath(s.extractor, req.RawPath)
 	if err != nil {
-		slog.Error("path extraction failed", "tx_id", req.TransactionID, "error", err)
-		s.audit("check", map[string]any{"tx_id": req.TransactionID, "policy_id": req.PolicyID, "outcome": "error", "code": "INVALID_REQUEST", "error": err.Error()})
+		slog.Error("path extraction failed", "tx_id", txID, "error", err)
+		s.audit("check", map[string]any{"tx_id": txID, "policy_id": req.PolicyID, "outcome": "error", "code": "INVALID_REQUEST", "error": err.Error()})
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", fmt.Sprintf("path extraction failed: %v", err))
 		return
 	}
-	slog.Debug("path extracted", "tx_id", req.TransactionID, "hops", len(path.Hops), "fingerprint", path.Fingerprint)
+	slog.Debug("path extracted", "tx_id", txID, "hops", len(path.Hops), "fingerprint", path.Fingerprint)
 
 	result, err := checker.Check(path)
 	if err != nil {
-		slog.Error("compliance check failed", "tx_id", req.TransactionID, "policy_id", req.PolicyID, "error", err)
-		s.audit("check", map[string]any{"tx_id": req.TransactionID, "policy_id": req.PolicyID, "outcome": "error", "code": "INTERNAL_ERROR", "error": err.Error()})
+		slog.Error("compliance check failed", "tx_id", txID, "policy_id", req.PolicyID, "error", err)
+		s.audit("check", map[string]any{"tx_id": txID, "policy_id": req.PolicyID, "outcome": "error", "code": "INTERNAL_ERROR", "error": err.Error()})
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fmt.Sprintf("check failed: %v", err))
 		return
 	}
 
 	var resp model.PolicyResult
 	if result.Compliant {
-		rcpt, err := s.generator.IssueAndAppend(s.receipts, req.TransactionID, req.PolicyID, path)
+		rcpt, err := s.generator.IssueAndAppend(s.receipts, txID, req.PolicyID, path)
 		if err != nil {
 			message := fmt.Sprintf("receipt generation failed: %v", err)
-			if rcpt != nil {
-				slog.Error("failed to persist receipt", "tx_id", req.TransactionID, "receipt_id", rcpt.ID, "error", err)
-				s.auditReceiptPersistenceFailure("check", req.TransactionID, req.PolicyID, rcpt.ID, err)
+			if receiptID := receiptIDFromError(err); receiptID != "" {
+				slog.Error("failed to persist receipt", "tx_id", txID, "receipt_id", receiptID, "error", err)
+				s.auditReceiptPersistenceFailure("check", txID, req.PolicyID, receiptID, err)
 				message = fmt.Sprintf("persisting receipt failed: %v", err)
 			} else {
-				slog.Error("receipt generation failed", "tx_id", req.TransactionID, "error", err)
+				slog.Error("receipt generation failed", "tx_id", txID, "error", err)
 			}
-			s.audit("check", map[string]any{"tx_id": req.TransactionID, "policy_id": req.PolicyID, "outcome": "error", "code": "INTERNAL_ERROR", "error": err.Error()})
+			s.audit("check", map[string]any{"tx_id": txID, "policy_id": req.PolicyID, "outcome": "error", "code": "INTERNAL_ERROR", "error": err.Error()})
 			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", message)
 			return
 		}
-		slog.Info("compliance check passed", "tx_id", req.TransactionID, "policy_id", req.PolicyID, "receipt_id", rcpt.ID)
+		slog.Info("compliance check passed", "tx_id", txID, "policy_id", req.PolicyID, "receipt_id", rcpt.ID)
 		s.audit("check", map[string]any{
-			"tx_id":            req.TransactionID,
+			"tx_id":            txID,
 			"policy_id":        req.PolicyID,
 			"compliant":        true,
 			"path_fingerprint": path.Fingerprint,
@@ -371,10 +399,10 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		})
 		resp = model.PolicyResult{Compliant: true, Receipt: rcpt}
 	} else {
-		v := s.detector.Record(req.TransactionID, req.PolicyID, result.ViolatedClause, path, result.OffendingHops)
-		slog.Warn("compliance violation detected", "tx_id", req.TransactionID, "policy_id", req.PolicyID, "violation_id", v.ID, "clause", result.ViolatedClause)
+		v := s.detector.Record(txID, req.PolicyID, result.ViolatedClause, path, result.OffendingHops)
+		slog.Warn("compliance violation detected", "tx_id", txID, "policy_id", req.PolicyID, "violation_id", v.ID, "clause", result.ViolatedClause)
 		s.audit("check", map[string]any{
-			"tx_id":            req.TransactionID,
+			"tx_id":            txID,
 			"policy_id":        req.PolicyID,
 			"compliant":        false,
 			"path_fingerprint": path.Fingerprint,
@@ -439,26 +467,24 @@ type SettleResponse struct {
 	Error              string               `json:"error,omitempty"`
 }
 
-func canonicalSettleRequestDigest(req SettleRequest, txID string, path *model.SCIONPath) (string, error) {
+func canonicalSettleRequestDigest(req SettleRequest, txID string) (string, error) {
 	rawPathHash := sha256.Sum256(req.RawPath)
 	payload := struct {
-		TransactionID   string `json:"transaction_id"`
-		From            string `json:"from"`
-		To              string `json:"to"`
-		Amount          int64  `json:"amount"`
-		Currency        string `json:"currency"`
-		PolicyID        string `json:"policy_id"`
-		PathFingerprint string `json:"path_fingerprint"`
-		RawPathSHA256   string `json:"raw_path_sha256"`
+		TransactionID string `json:"transaction_id"`
+		From          string `json:"from"`
+		To            string `json:"to"`
+		Amount        int64  `json:"amount"`
+		Currency      string `json:"currency"`
+		PolicyID      string `json:"policy_id"`
+		RawPathSHA256 string `json:"raw_path_sha256"`
 	}{
-		TransactionID:   txID,
-		From:            req.From,
-		To:              req.To,
-		Amount:          req.Amount,
-		Currency:        req.Currency,
-		PolicyID:        req.PolicyID,
-		PathFingerprint: path.Fingerprint,
-		RawPathSHA256:   fmt.Sprintf("%x", rawPathHash[:]),
+		TransactionID: txID,
+		From:          req.From,
+		To:            req.To,
+		Amount:        req.Amount,
+		Currency:      req.Currency,
+		PolicyID:      req.PolicyID,
+		RawPathSHA256: fmt.Sprintf("%x", rawPathHash[:]),
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -468,7 +494,7 @@ func canonicalSettleRequestDigest(req SettleRequest, txID string, path *model.SC
 	return fmt.Sprintf("%x", digest[:]), nil
 }
 
-func settleRequestMatchesTransaction(existing *dlt.Transaction, req SettleRequest, requestDigest, pathFingerprint string) bool {
+func settleRequestMatchesTransaction(existing *dlt.Transaction, req SettleRequest, requestDigest string) bool {
 	if existing.RequestDigest != "" {
 		return existing.RequestDigest == requestDigest
 	}
@@ -476,8 +502,185 @@ func settleRequestMatchesTransaction(existing *dlt.Transaction, req SettleReques
 		existing.To == req.To &&
 		existing.Amount == req.Amount &&
 		existing.Currency == req.Currency &&
-		existing.PolicyID == req.PolicyID &&
-		existing.PathFingerprint == pathFingerprint
+		existing.PolicyID == req.PolicyID
+}
+
+func (s *Server) validateLegacySettlementPath(existing *dlt.Transaction, req SettleRequest, path *model.SCIONPath) (*model.SCIONPath, string, error) {
+	if existing.RequestDigest != "" || existing.PathFingerprint == "" {
+		return path, "", nil
+	}
+	if path == nil {
+		var err error
+		path, err = scion.BuildSCIONPath(s.extractor, req.RawPath)
+		if err != nil {
+			return nil, "INVALID_REQUEST", fmt.Errorf("path extraction failed: %w", err)
+		}
+	}
+	if path.Fingerprint != existing.PathFingerprint {
+		return path, "TX_CONFLICT", fmt.Errorf("transaction ID %s was already used with a different path", existing.ID)
+	}
+	return path, "", nil
+}
+
+func confirmedConsensus(txID string) *dlt.ConsensusResult {
+	return &dlt.ConsensusResult{Confirmed: true, TxID: txID}
+}
+
+func receiptPolicyID(tx *dlt.Transaction, fallback string) string {
+	if tx != nil && tx.PolicyID != "" {
+		return tx.PolicyID
+	}
+	return fallback
+}
+
+func (s *Server) loadLedgerReceipt(tx *dlt.Transaction) (*model.ComplianceReceipt, string, error) {
+	if tx.ReceiptID == "" {
+		return nil, "", nil
+	}
+	rcpt, err := s.receipts.GetByID(tx.ReceiptID)
+	if err != nil {
+		return nil, "RECEIPT_LOOKUP_FAILED", fmt.Errorf("receipt lookup failed: %w", err)
+	}
+	if rcpt == nil {
+		return nil, "SETTLEMENT_RECEIPT_MISSING", fmt.Errorf("confirmed transaction references missing durable receipt %s", tx.ReceiptID)
+	}
+	return rcpt, "", nil
+}
+
+func (s *Server) ensureSettlementReceipt(txID, policyID string, rawPath []byte, path *model.SCIONPath) (*model.ComplianceReceipt, string, error) {
+	tx := s.ledger.GetTransaction(txID)
+	if tx == nil {
+		return nil, "SETTLEMENT_RECEIPT_FAILED", fmt.Errorf("transaction %s not found", txID)
+	}
+	if tx.Status != dlt.TxConfirmed {
+		return nil, "SETTLEMENT_RECEIPT_FAILED", fmt.Errorf("transaction %s is %s", txID, tx.Status)
+	}
+	if rcpt, code, err := s.loadLedgerReceipt(tx); rcpt != nil || err != nil {
+		return rcpt, code, err
+	}
+	if tx.RequestDigest == "" && tx.PathFingerprint == "" {
+		return nil, "SETTLEMENT_RECEIPT_MISSING", fmt.Errorf("confirmed legacy transaction %s is missing a durable receipt and path fingerprint; refusing to mint a receipt from retry path", txID)
+	}
+
+	s.receiptMu.Lock()
+	defer s.receiptMu.Unlock()
+
+	tx = s.ledger.GetTransaction(txID)
+	if tx == nil {
+		return nil, "SETTLEMENT_RECEIPT_FAILED", fmt.Errorf("transaction %s not found", txID)
+	}
+	if tx.Status != dlt.TxConfirmed {
+		return nil, "SETTLEMENT_RECEIPT_FAILED", fmt.Errorf("transaction %s is %s", txID, tx.Status)
+	}
+	if rcpt, code, err := s.loadLedgerReceipt(tx); rcpt != nil || err != nil {
+		return rcpt, code, err
+	}
+	if tx.RequestDigest == "" && tx.PathFingerprint == "" {
+		return nil, "SETTLEMENT_RECEIPT_MISSING", fmt.Errorf("confirmed legacy transaction %s is missing a durable receipt and path fingerprint; refusing to mint a receipt from retry path", txID)
+	}
+
+	if path == nil {
+		var err error
+		path, err = scion.BuildSCIONPath(s.extractor, rawPath)
+		if err != nil {
+			return nil, "SETTLEMENT_RECEIPT_FAILED", fmt.Errorf("path extraction failed for settlement receipt: %w", err)
+		}
+	}
+	if tx.PathFingerprint != "" && path.Fingerprint != tx.PathFingerprint {
+		return nil, "SETTLEMENT_RECEIPT_FAILED", fmt.Errorf("path fingerprint %s does not match confirmed transaction fingerprint %s", path.Fingerprint, tx.PathFingerprint)
+	}
+
+	rcpt, err := s.generator.IssueAndAppend(s.receipts, txID, policyID, path)
+	if err != nil {
+		if receiptID := receiptIDFromError(err); receiptID != "" {
+			s.auditReceiptPersistenceFailure("settle", txID, policyID, receiptID, err)
+		}
+		return nil, "SETTLEMENT_RECEIPT_FAILED", err
+	}
+	if _, err := s.ledger.AttachReceipt(txID, rcpt.ID); err != nil {
+		return nil, "SETTLEMENT_RECEIPT_FAILED", fmt.Errorf("attaching receipt to ledger: %w", err)
+	}
+	return rcpt, "", nil
+}
+
+func writeSettlementReceiptFailure(w http.ResponseWriter, txID string, consensus *dlt.ConsensusResult, code string, err error, idempotent bool) {
+	if consensus == nil {
+		consensus = confirmedConsensus(txID)
+	}
+	persisted := false
+	warning := "settlement confirmed but receipt generation or persistence failed"
+	if code == "SETTLEMENT_RECEIPT_MISSING" {
+		warning = "transaction is confirmed but the ledger receipt is not durable"
+	}
+	if code == "RECEIPT_LOOKUP_FAILED" {
+		warning = "transaction is confirmed but receipt lookup failed"
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusInternalServerError)
+	json.NewEncoder(w).Encode(SettleResponse{
+		Consensus:          consensus,
+		Compliance:         &model.PolicyResult{Compliant: true},
+		ReceiptPersisted:   &persisted,
+		PersistenceWarning: warning,
+		Idempotent:         idempotent,
+		Code:               code,
+		Error:              err.Error(),
+	})
+}
+
+func (s *Server) handleExistingSettlement(w http.ResponseWriter, existing *dlt.Transaction, req SettleRequest, requestDigest string, path *model.SCIONPath) {
+	txID := existing.ID
+	if !settleRequestMatchesTransaction(existing, req, requestDigest) {
+		slog.Warn("settle idempotency conflict", "tx_id", txID, "existing_digest", existing.RequestDigest, "request_digest", requestDigest)
+		s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": "TX_CONFLICT"})
+		writeError(w, http.StatusConflict, "TX_CONFLICT", fmt.Sprintf("transaction ID %s was already used with a different request", txID))
+		return
+	}
+	var code string
+	var err error
+	path, code, err = s.validateLegacySettlementPath(existing, req, path)
+	if err != nil {
+		slog.Warn("settle idempotency path conflict", "tx_id", txID, "code", code, "error", err)
+		s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": code, "error": err.Error()})
+		if code == "TX_CONFLICT" {
+			writeError(w, http.StatusConflict, code, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, code, err.Error())
+		return
+	}
+
+	switch existing.Status {
+	case dlt.TxConfirmed:
+		policyID := receiptPolicyID(existing, req.PolicyID)
+		rcpt, code, err := s.ensureSettlementReceipt(txID, policyID, req.RawPath, path)
+		if err != nil {
+			slog.Error("failed to load or repair idempotent settlement receipt", "tx_id", txID, "code", code, "error", err)
+			s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": code, "error": err.Error()})
+			writeSettlementReceiptFailure(w, txID, confirmedConsensus(txID), code, err, true)
+			return
+		}
+		persisted := true
+		slog.Debug("idempotent settle — already confirmed", "tx_id", txID)
+		s.audit("settle", map[string]any{"tx_id": txID, "outcome": "idempotent", "status": "confirmed"})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(SettleResponse{
+			Consensus:        confirmedConsensus(txID),
+			Compliance:       &model.PolicyResult{Compliant: true, Receipt: rcpt},
+			ReceiptPersisted: &persisted,
+			Idempotent:       true,
+		})
+		return
+	case dlt.TxPending:
+		s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": "TX_PENDING"})
+		writeError(w, http.StatusConflict, "TX_PENDING", fmt.Sprintf("transaction %s is pending", txID))
+		return
+	default:
+		s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": "DUPLICATE_TX"})
+		writeError(w, http.StatusConflict, "DUPLICATE_TX", fmt.Sprintf("transaction ID %s was already used", txID))
+		return
+	}
 }
 
 func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
@@ -511,6 +714,18 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Debug("settlement requested", "from", req.From, "to", req.To, "amount", req.Amount, "currency", req.Currency, "policy_id", req.PolicyID)
+
+	requestDigest, err := canonicalSettleRequestDigest(req, txID)
+	if err != nil {
+		slog.Error("settlement request digest failed", "tx_id", txID, "error", err)
+		s.audit("settle", map[string]any{"tx_id": txID, "policy_id": req.PolicyID, "outcome": "error", "code": "INTERNAL_ERROR", "error": err.Error()})
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fmt.Sprintf("settlement request digest failed: %v", err))
+		return
+	}
+	if existing := s.ledger.GetTransaction(txID); existing != nil {
+		s.handleExistingSettlement(w, existing, req, requestDigest, nil)
+		return
+	}
 
 	// Step 1: Compliance check — must pass before consensus.
 	checker, ok := s.checkers[req.PolicyID]
@@ -555,14 +770,6 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requestDigest, err := canonicalSettleRequestDigest(req, txID, path)
-	if err != nil {
-		slog.Error("settlement request digest failed", "tx_id", txID, "error", err)
-		s.audit("settle", map[string]any{"tx_id": txID, "policy_id": req.PolicyID, "outcome": "error", "code": "INTERNAL_ERROR", "error": err.Error()})
-		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", fmt.Sprintf("settlement request digest failed: %v", err))
-		return
-	}
-
 	// Step 2: Path is compliant — proceed to consensus.
 	tx := &dlt.Transaction{
 		ID:              txID,
@@ -578,59 +785,8 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	// Atomically submit + run consensus under one engine lock.
 	existing, result, submitErr := s.consensus.SubmitAndRunRound(tx)
 	if existing != nil {
-		if !settleRequestMatchesTransaction(existing, req, requestDigest, path.Fingerprint) {
-			slog.Warn("settle idempotency conflict", "tx_id", txID, "existing_digest", existing.RequestDigest, "request_digest", requestDigest)
-			s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": "TX_CONFLICT"})
-			writeError(w, http.StatusConflict, "TX_CONFLICT", fmt.Sprintf("transaction ID %s was already used with a different request", txID))
-			return
-		}
-
-		switch existing.Status {
-		case dlt.TxConfirmed:
-			rcpt, err := s.receipts.GetByTxID(txID)
-			if err != nil {
-				slog.Error("failed to load idempotent settlement receipt", "tx_id", txID, "error", err)
-				s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": "RECEIPT_LOOKUP_FAILED", "error": err.Error()})
-				writeError(w, http.StatusInternalServerError, "RECEIPT_LOOKUP_FAILED", fmt.Sprintf("receipt lookup failed: %v", err))
-				return
-			}
-			if rcpt == nil {
-				persisted := false
-				slog.Error("confirmed transaction is missing durable receipt", "tx_id", txID)
-				s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": "SETTLEMENT_RECEIPT_MISSING"})
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(SettleResponse{
-					Consensus:          &dlt.ConsensusResult{Confirmed: true, TxID: txID},
-					Compliance:         &model.PolicyResult{Compliant: true},
-					ReceiptPersisted:   &persisted,
-					PersistenceWarning: "transaction is confirmed but no durable receipt exists",
-					Idempotent:         true,
-					Code:               "SETTLEMENT_RECEIPT_MISSING",
-					Error:              "confirmed transaction is missing durable receipt",
-				})
-				return
-			}
-			persisted := true
-			slog.Debug("idempotent settle — already confirmed", "tx_id", txID)
-			s.audit("settle", map[string]any{"tx_id": txID, "outcome": "idempotent", "status": "confirmed"})
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(SettleResponse{
-				Consensus:        &dlt.ConsensusResult{Confirmed: true, TxID: txID},
-				Compliance:       &model.PolicyResult{Compliant: true, Receipt: rcpt},
-				ReceiptPersisted: &persisted,
-				Idempotent:       true,
-			})
-			return
-		case dlt.TxPending:
-			s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": "TX_PENDING"})
-			writeError(w, http.StatusConflict, "TX_PENDING", fmt.Sprintf("transaction %s is pending", txID))
-			return
-		default: // TxRejected
-			s.audit("settle", map[string]any{"tx_id": txID, "outcome": "error", "code": "DUPLICATE_TX"})
-			writeError(w, http.StatusConflict, "DUPLICATE_TX", fmt.Sprintf("transaction ID %s was already used", txID))
-			return
-		}
+		s.handleExistingSettlement(w, existing, req, requestDigest, path)
+		return
 	}
 	if result == nil && submitErr != nil {
 		// Submit validation failed (before round ran)
@@ -660,31 +816,14 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Step 3: Consensus confirmed — issue and durably store compliance receipt.
-	rcpt, err := s.generator.IssueAndAppend(s.receipts, txID, req.PolicyID, path)
+	rcpt, code, err := s.ensureSettlementReceipt(txID, req.PolicyID, req.RawPath, path)
 	if err != nil {
-		persisted := false
-		if rcpt != nil {
-			slog.Error("failed to persist receipt during settlement", "tx_id", txID, "receipt_id", rcpt.ID, "error", err)
-			s.auditReceiptPersistenceFailure("settle", txID, req.PolicyID, rcpt.ID, err)
-			resp.Compliance = &model.PolicyResult{Compliant: true, Receipt: rcpt}
-			resp.PersistenceWarning = fmt.Sprintf("settlement confirmed but receipt %s was not persisted", rcpt.ID)
-			resp.Error = fmt.Sprintf("receipt persistence failed: %v", err)
-		} else {
-			slog.Error("receipt generation failed during settlement", "tx_id", txID, "error", err)
-			resp.Compliance = &model.PolicyResult{Compliant: true}
-			resp.PersistenceWarning = "settlement confirmed but receipt generation failed"
-			resp.Error = fmt.Sprintf("receipt generation failed: %v", err)
-		}
-		s.audit("settle", map[string]any{"tx_id": txID, "policy_id": req.PolicyID, "outcome": "error", "code": "SETTLEMENT_RECEIPT_FAILED", "error": err.Error()})
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		resp.ReceiptPersisted = &persisted
-		resp.Code = "SETTLEMENT_RECEIPT_FAILED"
-		json.NewEncoder(w).Encode(resp)
+		slog.Error("receipt generation or persistence failed during settlement", "tx_id", txID, "code", code, "error", err)
+		s.audit("settle", map[string]any{"tx_id": txID, "policy_id": req.PolicyID, "outcome": "error", "code": code, "error": err.Error()})
+		writeSettlementReceiptFailure(w, txID, result, code, err, false)
 		return
 	}
 
-	tx.ReceiptID = rcpt.ID
 	persisted := true
 	slog.Info("settlement completed", "tx_id", txID, "round", result.Round, "receipt_id", rcpt.ID)
 	s.audit("settle", map[string]any{

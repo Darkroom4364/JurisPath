@@ -39,6 +39,24 @@ type ThresholdSigner interface {
 	SignThreshold(data []byte) ([]model.ThresholdSignature, int, int, error)
 }
 
+// AppendError reports a durable-store append failure without exposing the signed
+// receipt that failed to persist.
+type AppendError struct {
+	ReceiptID string
+	Err       error
+}
+
+func (e *AppendError) Error() string {
+	if e.ReceiptID == "" {
+		return fmt.Sprintf("appending receipt: %v", e.Err)
+	}
+	return fmt.Sprintf("appending receipt %s: %v", e.ReceiptID, e.Err)
+}
+
+func (e *AppendError) Unwrap() error {
+	return e.Err
+}
+
 // NewGenerator creates a receipt generator with a fresh Ed25519 key pair.
 func NewGenerator() (*Generator, error) {
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -198,7 +216,9 @@ func (g *Generator) Issue(txID, policyID string, path *model.SCIONPath) (*model.
 }
 
 // IssueAndAppend creates a signed receipt, appends it to the durable store,
-// and advances the generator chain state only after persistence succeeds.
+// and advances the generator chain state only after persistence succeeds. If
+// append fails, the signed receipt is not returned because it is not part of the
+// durable receipt chain.
 func (g *Generator) IssueAndAppend(store Store, txID, policyID string, path *model.SCIONPath) (*model.ComplianceReceipt, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -208,7 +228,7 @@ func (g *Generator) IssueAndAppend(store Store, txID, policyID string, path *mod
 		return nil, err
 	}
 	if err := store.Append(receipt); err != nil {
-		return receipt, err
+		return nil, &AppendError{ReceiptID: receipt.ID, Err: err}
 	}
 
 	g.seqNo = receipt.SeqNo
@@ -223,6 +243,8 @@ func (g *Generator) buildReceiptLocked(txID, policyID string, path *model.SCIONP
 		TransactionID:   txID,
 		PolicyID:        policyID,
 		Path:            *path,
+		EvidenceClass:   model.NormalizeEvidenceClass(path.EvidenceClass),
+		ProofStatus:     model.ProofStatusUnverified,
 		SeqNo:           nextSeq,
 		Timestamp:       time.Now().UTC(),
 		OraclePublicKey: append([]byte(nil), g.publicKey...),
@@ -240,6 +262,7 @@ func (g *Generator) buildReceiptLocked(txID, policyID string, path *model.SCIONP
 		}
 		receipt.ISDProofs = append(receipt.ISDProofs, proof)
 	}
+	receipt.ProofStatus = aggregateProofStatus(receipt.ISDProofs)
 
 	// Sign the receipt
 	payload, err := marshalForSigning(receipt)
@@ -260,6 +283,24 @@ func (g *Generator) buildReceiptLocked(txID, policyID string, path *model.SCIONP
 
 	h := sha256.Sum256(receipt.Signature)
 	return receipt, h[:], nil
+}
+
+func aggregateProofStatus(proofs []model.ISDProof) string {
+	if len(proofs) == 0 {
+		return model.ProofStatusUnverified
+	}
+	status := ""
+	for _, proof := range proofs {
+		current := model.NormalizeProofStatus(proof.VerificationStatus)
+		if status == "" {
+			status = current
+			continue
+		}
+		if current != status {
+			return model.ProofStatusMixed
+		}
+	}
+	return status
 }
 
 // SeedChain restores the hash chain state from the receipt store on startup.
@@ -302,6 +343,17 @@ func Verify(receipt *model.ComplianceReceipt) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("marshaling receipt for verification: %w", err)
 	}
+	if ed25519.Verify(receipt.OraclePublicKey, payload, receipt.Signature) {
+		return true, nil
+	}
+	if !isLegacySigningPayloadCandidate(receipt) {
+		return false, nil
+	}
+
+	payload, err = marshalLegacyForSigning(receipt)
+	if err != nil {
+		return false, fmt.Errorf("marshaling legacy receipt for verification: %w", err)
+	}
 	return ed25519.Verify(receipt.OraclePublicKey, payload, receipt.Signature), nil
 }
 
@@ -316,6 +368,39 @@ func marshalForSigning(r *model.ComplianceReceipt) ([]byte, error) {
 	// PathRaw contains the actual SCION dataplane bytes when available,
 	// binding the signature to the authenticated path data (hop field MACs)
 	// rather than just the oracle's text reconstruction.
+	signable := struct {
+		ID            string           `json:"id"`
+		TransactionID string           `json:"transaction_id"`
+		PolicyID      string           `json:"policy_id"`
+		PathFP        string           `json:"path_fingerprint"`
+		PathRaw       []byte           `json:"path_raw,omitempty"`
+		EvidenceClass string           `json:"evidence_class"`
+		ProofStatus   string           `json:"proof_status"`
+		SeqNo         uint64           `json:"seq_no"`
+		Timestamp     time.Time        `json:"timestamp"`
+		ISDProofs     []model.ISDProof `json:"isd_proofs"`
+		PreviousHash  []byte           `json:"previous_hash,omitempty"`
+	}{
+		ID:            r.ID,
+		TransactionID: r.TransactionID,
+		PolicyID:      r.PolicyID,
+		PathFP:        r.Path.Fingerprint,
+		PathRaw:       r.Path.Raw,
+		EvidenceClass: model.NormalizeEvidenceClass(r.EvidenceClass),
+		ProofStatus:   model.NormalizeProofStatus(r.ProofStatus),
+		SeqNo:         r.SeqNo,
+		Timestamp:     r.Timestamp,
+		ISDProofs:     r.ISDProofs,
+		PreviousHash:  r.PreviousHash,
+	}
+	return json.Marshal(signable)
+}
+
+func isLegacySigningPayloadCandidate(r *model.ComplianceReceipt) bool {
+	return r.EvidenceClass == "" && r.ProofStatus == ""
+}
+
+func marshalLegacyForSigning(r *model.ComplianceReceipt) ([]byte, error) {
 	signable := struct {
 		ID            string           `json:"id"`
 		TransactionID string           `json:"transaction_id"`

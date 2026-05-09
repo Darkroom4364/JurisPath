@@ -54,8 +54,8 @@ function addTxRow(item, compliant) {
     const statusClass = compliant ? 'compliant' : 'violation';
     const statusText = compliant ? 'Compliant' : 'Violation';
     const details = compliant
-        ? `Receipt #${item.seq_no}`
-        : item.violated_clause || 'Path violation';
+        ? `Receipt #${item.seq_no} | ${item.evidence_class || 'evidence n/a'} / ${item.proof_status || 'proof n/a'}`
+        : `${item.violated_clause || 'Path violation'} | ${item.evidence_class || 'evidence n/a'} / ${item.proof_status || 'proof n/a'}`;
 
     row.append(
         tableCodeCell(txId),
@@ -83,7 +83,7 @@ function addAlertCard(v) {
 
     const meta = document.createElement('div');
     meta.className = 'alert-meta';
-    meta.textContent = `TX: ${v.transaction_id || ''} | ${new Date(v.timestamp).toLocaleString()}`;
+    meta.textContent = `TX: ${v.transaction_id || ''} | ${v.evidence_class || 'evidence n/a'} / ${v.proof_status || 'proof n/a'} | ${new Date(v.timestamp).toLocaleString()}`;
 
     card.append(severity, message, meta);
     list.prepend(card);
@@ -98,7 +98,7 @@ function flashPath(type) {
     }
 }
 
-// Scenario C: Path pre-filtering display
+// Scenario D: Path pre-filtering display
 function displayPrefilterResults(result) {
     const container = document.getElementById('prefilter-results');
     if (!container) return;

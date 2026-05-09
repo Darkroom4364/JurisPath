@@ -158,6 +158,7 @@ func sendSettle(client *http.Client, baseURL, txID, from, to string, amount int6
 	if resp.StatusCode == http.StatusUnprocessableEntity && result.Compliance != nil && result.Compliance.Violation != nil {
 		fmt.Printf("  SETTLEMENT BLOCKED - %s\n", result.Compliance.Violation.ViolatedClause)
 		fmt.Printf("  Severity: %s, offending hops: %d\n", result.Compliance.Violation.Severity, len(result.Compliance.Violation.OffendingHops))
+		fmt.Printf("  Evidence: %s, proof: %s\n", result.Compliance.Violation.EvidenceClass, result.Compliance.Violation.ProofStatus)
 		return
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -167,12 +168,14 @@ func sendSettle(client *http.Client, baseURL, txID, from, to string, amount int6
 		log.Fatalf("settlement was not confirmed: %+v", result.Consensus)
 	}
 	if result.Compliance == nil || !result.Compliance.Compliant || result.Compliance.Receipt == nil {
-		log.Fatalf("settlement response missing compliance receipt")
+		log.Fatalf("settlement response missing path-policy receipt")
 	}
 
 	fmt.Printf("  SETTLED - %s -> %s %d %s\n", from, to, amount, currency)
 	fmt.Printf("  Consensus confirmed in round %d\n", result.Consensus.Round)
 	fmt.Printf("  Receipt ID: %s, seq #%d\n", result.Compliance.Receipt.ID, result.Compliance.Receipt.SeqNo)
+	fmt.Printf("  Evidence: %s, proof: %s\n", result.Compliance.Receipt.EvidenceClass, result.Compliance.Receipt.ProofStatus)
+	fmt.Printf("  Path fingerprint: %s\n", result.Compliance.Receipt.Path.Fingerprint)
 	if result.ReceiptPersisted != nil && !*result.ReceiptPersisted {
 		fmt.Printf("  Persistence warning: %s\n", result.PersistenceWarning)
 	}

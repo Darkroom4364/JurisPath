@@ -23,6 +23,11 @@ func (m *MockPathExtractor) ExtractHops(rawPath []byte) ([]model.ASHop, error) {
 	return hops, nil
 }
 
+// EvidenceMetadata labels mock extractor output as explicit demo evidence.
+func (m *MockPathExtractor) EvidenceMetadata(_ []byte, _ []model.ASHop) (string, string) {
+	return model.EvidenceClassExplicitDemo, model.ProofStatusUnverified
+}
+
 // NewMockPath creates a raw path from a list of hops (JSON-encoded).
 func NewMockPath(hops []model.ASHop) ([]byte, error) {
 	return json.Marshal(hops)

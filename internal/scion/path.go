@@ -17,6 +17,13 @@ type PathExtractor interface {
 	ExtractHops(rawPath []byte) ([]model.ASHop, error)
 }
 
+// EvidenceMetadataProvider lets extractors label the quality/source of the
+// path evidence they return. Extractors that do not implement it are treated as
+// explicit demo inputs.
+type EvidenceMetadataProvider interface {
+	EvidenceMetadata(rawPath []byte, hops []model.ASHop) (evidenceClass, proofStatus string)
+}
+
 // FingerprintHops computes a deterministic SHA-256 fingerprint from the hop
 // sequence. This is the fallback fingerprint used in mock mode where raw
 // SCION path bytes are not available.
@@ -54,11 +61,20 @@ func BuildSCIONPath(extractor PathExtractor, raw []byte) (*model.SCIONPath, erro
 		return nil, fmt.Errorf("no hops found in raw path")
 	}
 	fp := FingerprintHops(hops)
-	slog.Debug("SCION path built", "hops", len(hops), "fingerprint", fp)
+	evidenceClass := model.EvidenceClassExplicitDemo
+	proofStatus := model.ProofStatusUnverified
+	if provider, ok := extractor.(EvidenceMetadataProvider); ok {
+		evidenceClass, proofStatus = provider.EvidenceMetadata(raw, hops)
+	}
+	evidenceClass = model.NormalizeEvidenceClass(evidenceClass)
+	proofStatus = model.NormalizeProofStatus(proofStatus)
+	slog.Debug("SCION path built", "hops", len(hops), "fingerprint", fp, "evidence_class", evidenceClass, "proof_status", proofStatus)
 	return &model.SCIONPath{
-		Raw:         raw,
-		Hops:        hops,
-		Fingerprint: fp,
+		Raw:           raw,
+		Hops:          hops,
+		Fingerprint:   fp,
+		EvidenceClass: evidenceClass,
+		ProofStatus:   proofStatus,
 	}, nil
 }
 
@@ -134,9 +150,11 @@ func BuildSCIONPathFromSnet(extractor *SnetPathExtractor, p snet.Path) (*model.S
 	extractHopMACs(rawPath, hops)
 
 	return &model.SCIONPath{
-		Raw:         rawPath,
-		Hops:        hops,
-		Fingerprint: FingerprintPath(rawPath, hops),
+		Raw:           rawPath,
+		Hops:          hops,
+		Fingerprint:   FingerprintPath(rawPath, hops),
+		EvidenceClass: model.EvidenceClassSCIONObserved,
+		ProofStatus:   model.ProofStatusObserved,
 	}, nil
 }
 

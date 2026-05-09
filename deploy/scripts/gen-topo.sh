@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # gen-topo.sh — Generate SCION crypto material for JurisPath 3-ISD topology.
 #
-# This script generates TRCs, AS certificates, and keys for all 5 ASes.
-# It uses scion-pki if available, otherwise falls back to openssl-based generation.
+# This script generates TRCs, AS certificates, and keys for all 5 ASes. It uses
+# scion-pki if available, then the JurisPath SCION Docker image if present, and
+# otherwise falls back to openssl-based placeholder material.
 #
 # Usage: ./gen-topo.sh
 #
@@ -12,6 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEPLOY_DIR="$SCRIPT_DIR/.."
 TOPO_DIR="$DEPLOY_DIR/topology"
 CRYPTO_DIR="$DEPLOY_DIR/crypto"
+SCION_PKI_IMAGE="${JURISPATH_SCION_PKI_IMAGE:-jurispath-scion-base}"
 
 # AS definitions: ISD-AS / directory-name / is-core
 declare -a AS_LIST=(
@@ -40,7 +42,9 @@ crypto_as_dir() {
 
   for candidate in \
     "$CRYPTO_DIR/ISD${isd_num}/AS${as_raw}" \
-    "$CRYPTO_DIR/ISD${isd_num}/AS${as_sanitized}"
+    "$CRYPTO_DIR/ISD${isd_num}/AS${as_sanitized}" \
+    "$CRYPTO_DIR/AS${as_raw}" \
+    "$CRYPTO_DIR/AS${as_sanitized}"
   do
     if [ -d "$candidate" ]; then
       printf '%s\n' "$candidate"
@@ -63,14 +67,24 @@ distribute_crypto() {
     src_as="$(crypto_as_dir "$isd_num" "$as_raw")"
     DEST="$TOPO_DIR/$as_dir/crypto"
     rm -rf "$DEST"
-    mkdir -p "$DEST/as" "$DEST/trcs" "$DEST/keys"
+    mkdir -p "$DEST/as" "$DEST/trcs" "$DEST/keys" "$DEST/certs"
+    mkdir -p "$src_as/keys"
+
+    for master_key in master0.key master1.key; do
+      if [ ! -s "$src_as/keys/$master_key" ]; then
+        openssl rand -hex 16 > "$src_as/keys/$master_key"
+      fi
+    done
 
     # Copy AS-specific crypto
     cp "$src_as/crypto/as/"* "$DEST/as/"
     cp "$src_as/keys/"* "$DEST/keys/"
 
-    # Copy TRC for this ISD
-    cp "$CRYPTO_DIR/ISD${isd_num}/trcs/"* "$DEST/trcs/"
+    # Copy all TRCs and certificate chains so cross-ISD core links have the
+    # trust material they need during process startup and path exchange.
+    find "$CRYPTO_DIR" -path "*/trcs/*.trc" -type f -exec cp {} "$DEST/trcs/" \;
+    find "$CRYPTO_DIR" -path "*/trcs/*.trc" -type f -exec cp {} "$DEST/certs/" \;
+    find "$CRYPTO_DIR" \( -name "*.pem" -o -name "*.crt" \) -type f -exec cp {} "$DEST/certs/" \;
 
     echo "  $as_dir -> crypto distributed"
   done
@@ -89,9 +103,27 @@ if command -v scion-pki &>/dev/null; then
   exit 0
 fi
 
-echo "scion-pki not found — generating crypto material with openssl..."
+# ── Method 2: Use scion-pki from the local SCION Docker image ─────────────
+if command -v docker &>/dev/null && docker image inspect "$SCION_PKI_IMAGE" >/dev/null 2>&1; then
+  echo "Found Docker image $SCION_PKI_IMAGE, using bundled scion-pki..."
+  rm -rf "$CRYPTO_DIR"
+  mkdir -p "$CRYPTO_DIR"
+  docker run --rm \
+    --user "$(id -u):$(id -g)" \
+    -v "$TOPO_DIR:/work/topology:ro" \
+    -v "$CRYPTO_DIR:/work/crypto" \
+    "$SCION_PKI_IMAGE" \
+    scion-pki testcrypto -t /work/topology/topology.topo -o /work/crypto
+  echo "Crypto material generated via Docker scion-pki at $CRYPTO_DIR"
+  distribute_crypto
+  echo "Done."
+  exit 0
+fi
 
-# ── Method 2: Generate self-signed crypto with openssl ───────────────────
+echo "scion-pki not found and Docker image $SCION_PKI_IMAGE is unavailable."
+echo "Generating placeholder crypto material with openssl..."
+
+# ── Method 3: Generate self-signed crypto with openssl ───────────────────
 # This produces the directory structure that SCION services expect:
 #   crypto/
 #     ISDx/
@@ -174,10 +206,11 @@ done
 echo ""
 echo "=== Crypto generation complete ==="
 echo ""
-echo "IMPORTANT: The generated TRCs are placeholders. For a fully working"
-echo "SCION deployment, install scion-pki and re-run this script, or build"
-echo "the SCION Docker image first and run:"
-echo "  docker run --rm -v \$PWD/deploy/topology:/work/topology -v \$PWD/deploy/crypto:/work/crypto jurispath-scion-base scion-pki testcrypto -t /work/topology/topology.topo -o /work/crypto"
+echo "IMPORTANT: The generated TRCs are placeholders and will not satisfy"
+echo "SCION service trust-material parsing. For a working SCION process"
+echo "smoke test, install scion-pki and re-run this script, or run"
+echo "make scion-image before make topo so the Docker-bundled scion-pki"
+echo "can generate real testcrypto material."
 echo ""
 
 # ── Copy crypto into per-AS topology directories ────────────────────────

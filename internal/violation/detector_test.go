@@ -34,6 +34,12 @@ func TestDetector_Record(t *testing.T) {
 	if v.Severity != "high" {
 		t.Fatalf("expected severity 'high' for 1 offending hop, got %s", v.Severity)
 	}
+	if v.EvidenceClass != model.EvidenceClassExplicitDemo {
+		t.Fatalf("EvidenceClass = %q, want %q", v.EvidenceClass, model.EvidenceClassExplicitDemo)
+	}
+	if v.ProofStatus != model.ProofStatusUnverified {
+		t.Fatalf("ProofStatus = %q, want %q", v.ProofStatus, model.ProofStatusUnverified)
+	}
 	if v.Timestamp.IsZero() {
 		t.Fatal("violation should have a timestamp")
 	}

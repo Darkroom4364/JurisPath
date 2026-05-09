@@ -1,8 +1,38 @@
 # JurisPath
 
-Jurisdiction-aware compliance oracle that validates SCION network paths against regulatory policies for cross-border DLT settlement. Issues signed compliance receipts, detects violations in real-time, and provides a live dashboard.
+Hackathon proof of concept for auditable SCION-style path checks before settlement-gateway messages are accepted. JurisPath issues signed path-policy receipts, records corridor policy violations, and provides CLI/API/dashboard surfaces for inspecting the receipt loop.
 
-Implements the compliance architecture proposed in [SNB Working Paper 2025-15](https://www.snb.ch/en/publications/research/working-papers/2025/working_paper_2025_15), targeting the [Secure Swiss Finance Network (SSFN)](https://www.six-group.com/en/products-services/banking-services/ssfn.html).
+Inspired by the SCION/DLT settlement direction discussed in [SNB Working Paper 2025-15](https://www.snb.ch/en/publications/research/working-papers/2025/working_paper_2025_15), with the [Secure Swiss Finance Network (SSFN)](https://www.six-group.com/en/products-services/banking-services/ssfn.html) as a plausible deployment context.
+
+## Current Status
+
+The PoC is demo-ready. The main local flow, app-only Docker smoke, optional
+SCION process smoke, metrics, tests, and documentation checks have been run
+successfully. See [docs/project-status.md](docs/project-status.md) for the
+current verification record and production boundary. The documentation index is
+in [docs/README.md](docs/README.md).
+
+Current receipts intentionally use `evidence_class=explicit-demo` and
+`proof_status=unverified`. JurisPath demonstrates the path-policy decision and
+receipt loop; it does not yet prove observed SCION dataplane traversal and it is
+not a legal-compliance verdict.
+
+## Quick Demo
+
+```bash
+make demo
+```
+
+For a 4-5 minute judge-facing walkthrough, use
+[docs/demo-script.md](docs/demo-script.md).
+
+Optional checks:
+
+```bash
+make poc-metrics
+make compose-smoke
+make compose-smoke-scion
+```
 
 ## Architecture
 
@@ -13,7 +43,7 @@ Client Request (HTTP POST /api/check)
         |
   Path Extractor ── extracts AS hops, computes SHA-256 fingerprint
         |
-  Path Compliance Checker ── validates path against jurisdiction policy
+  Path-Policy Checker ── validates path against corridor policy
         |
    +----+----+
    |         |
@@ -23,24 +53,24 @@ Receipt    Violation Detector
 Generator  (real-time SSE alerts)
    |
 Ed25519-signed
-Compliance Receipt
+Path-Policy Receipt
 ```
 
-The oracle sits between DLT validators and the SCION network layer. It inspects path metadata on consensus messages, confirms all hops remain within authorized ISDs, and produces cryptographic compliance receipts or raises violation alerts.
+The oracle sits between a settlement workflow and SCION path selection. In local demo mode it checks explicit path metadata and labels that evidence as `explicit-demo` / `unverified`; in SCION mode API-supplied raw paths fail closed until authenticated session/dataplane evidence is wired. The receipt attests that JurisPath checked a path claim against a policy version, not that a payment is legally compliant.
 
 ## Features
 
-- **Policy Engine** — YAML-based jurisdiction policies with strict all-hop enforcement
-- **Compliance Receipts** — Ed25519-signed receipts with monotonic sequence numbers and append-only storage (BoltDB)
+- **Policy Engine** — YAML-based corridor policies with strict all-hop enforcement
+- **Path-Policy Receipts** — Ed25519-signed receipts with top-level evidence class/proof status, monotonic sequence numbers, and append-only storage (BoltDB)
 - **Violation Detection** — Real-time pub/sub alerting via Server-Sent Events with severity classification
-- **Path Pre-filtering** — Filter available SCION paths to only jurisdiction-compliant options before sending
+- **Path Pre-filtering** — Filter caller-supplied SCION-style path candidates in demo mode; production SCION-observed path discovery remains future work
 - **Replay Detection** — Prevents stale path reuse via sequence number and timestamp validation
 - **Threshold Signing** — k-of-n multi-oracle signing support
 - **Audit Log** — Append-only BoltDB-backed audit trail
 - **DLT Consensus** — Lightweight 2-phase consensus engine (propose, vote, commit)
 - **Dashboard** — Web UI with SVG topology visualization, real-time transaction flow, and violation alerts
 
-## Jurisdiction Policies
+## Corridor Policies
 
 Three policies are included:
 
@@ -50,13 +80,14 @@ Three policies are included:
 | `eu_settlement.yaml` | ISD-CH, ISD-EU | Strict | Cross-border CHF-EUR settlement |
 | `demo_mixed.yaml` | ISD-CH, ISD-EU, ISD-X | Strict | Demo and testing |
 
-**Strict mode** requires every hop to stay within allowed ISDs. **Relaxed mode** only checks entry and exit hops.
+Only **strict mode** is supported: every hop must stay within allowed ISDs.
+Unsupported policy modes fail closed.
 
 ## Getting Started
 
 ### Prerequisites
 
-- Go 1.22+
+- Go 1.24.2+
 - Docker and Docker Compose (optional)
 
 ### TLS Startup Mode
@@ -109,10 +140,16 @@ Generate shell completion with `./bin/jurispath completion bash|zsh|fish`.
 make demo
 ```
 
-Runs three scenarios:
-- **Scenario A** — Compliant CHF-EUR settlement via ISD-CH and ISD-EU
-- **Scenario B** — Violation: settlement path transits unauthorized ISD-X
-- **Scenario C** — Path pre-filtering: only compliant paths returned
+Runs four scenarios:
+- **Scenario A** — Path-policy-allowed CHF-EUR demo settlement via ISD-CH and ISD-EU
+- **Scenario B** — Corridor policy violation: settlement path transits unauthorized ISD-X
+- **Scenario C** — Swiss-only settlement
+- **Scenario D** — Path pre-filtering: only policy-allowed candidates returned
+
+Demo receipts and violations expose `evidence_class` and `proof_status` at the
+top level. The default local demo reports `explicit-demo` and `unverified` so
+the PoC does not present caller-supplied path metadata as observed SCION
+dataplane evidence.
 
 For TLS demos against the local self-signed cert, start the HTTPS server and run:
 
@@ -120,11 +157,24 @@ For TLS demos against the local self-signed cert, start the HTTPS server and run
 make demo-tls
 ```
 
+### PoC Metrics
+
+The proposal metrics can be regenerated locally:
+
+```bash
+make poc-metrics
+```
+
+This reports path-check p50/p95 latency, signed receipt JSON size,
+receipt-chain verification time, and fail-closed behavior for missing proof
+material and receipt-store append failures. See
+[docs/poc-metrics.md](docs/poc-metrics.md) for the latest local baseline.
+
 ### Docker
 
 ```bash
 make up             # app-only PoC startup
-make compose-smoke  # build/start app and verify health/policies
+make compose-smoke  # build/start app and verify health/policies/demo
 make down           # stop
 ```
 
@@ -136,20 +186,27 @@ For the optional 3-ISD SCION topology, generate crypto and enable the compose
 profile:
 
 ```bash
+make scion-image
 make topo
 make up-scion
 ```
 
 To build the optional SCION profile, start all SCION services plus the app, and
-wait for health checks:
+wait for process health checks:
 
 ```bash
 make compose-smoke-scion
 ```
 
-The SCION image builds from the verified SCION v0.14.0 Debian release assets
-for `amd64` and `arm64`. Real SCION validator transport remains experimental
-and requires deliberate `JURISPATH_SCION_MODE=true` configuration.
+The SCION image builds from SCION v0.14.0 Debian release assets for `amd64`
+and `arm64`. `make scion-image` makes the bundled `scion-pki` available to
+`make topo` when no local `scion-pki` is installed. Without either source,
+`make topo` creates placeholder TRC files for layout inspection only; those
+placeholders are not valid enough for SCION services to become healthy.
+`make compose-smoke-scion` validates topology process startup, not
+SCION-observed JurisPath evidence. Real SCION validator transport remains
+experimental and requires deliberate `JURISPATH_SCION_MODE=true`
+configuration.
 
 For Docker TLS mode with local development certs:
 
@@ -170,12 +227,12 @@ default. Local demo targets set `JURISPATH_UNAUTHENTICATED_API=true` explicitly.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/check` | Check path compliance against a policy |
+| `POST` | `/api/check` | Check path metadata against a corridor policy |
 | `POST` | `/api/settle` | Submit a DLT settlement transaction |
-| `POST` | `/api/filter-paths` | Filter paths to compliant-only options |
-| `GET` | `/api/receipts` | List all compliance receipts |
+| `POST` | `/api/filter-paths` | Filter candidate paths to policy-allowed options |
+| `GET` | `/api/receipts` | List all path-policy receipts |
 | `GET` | `/api/violations` | List all recorded violations |
-| `GET` | `/api/policies` | List loaded jurisdiction policies |
+| `GET` | `/api/policies` | List loaded corridor policies |
 | `GET` | `/api/ledger` | View ledger state |
 | `GET` | `/api/transactions` | View transaction history |
 | `GET` | `/api/events` | SSE stream for real-time violation alerts |
@@ -185,8 +242,8 @@ default. Local demo targets set `JURISPATH_UNAUTHENTICATED_API=true` explicitly.
 
 `POST /api/settle` treats a client-supplied `transaction_id` as an idempotency
 key. The server stores a canonical digest of the original settlement request,
-including amount, currency, policy, and path fingerprint. A retry with the same
-request returns the original settlement receipt; a retry with different
+including amount, currency, policy, and the exact `raw_path` bytes. A retry with
+the same request returns the original settlement receipt; a retry with different
 settlement or path data returns `409 TX_CONFLICT`.
 
 Ordinary settlement success requires both confirmed consensus and a durable
@@ -208,14 +265,14 @@ internal/
   api/             HTTP API server and SSE streaming
   audit/           Append-only BoltDB audit log
   dlt/             Consensus engine and ledger state machine
-  pathcheck/       ISD policy compliance checker and path filter
+  pathcheck/       ISD path-policy checker and path filter
   policy/          YAML policy loader
   receipt/         Ed25519 receipt signing and BoltDB store
   scion/           SCION path extraction and fingerprinting
   security/        Replay detection and threshold signing
   violation/       Violation detection, pub/sub, and BoltDB store
 pkg/model/         Shared data types (ASHop, SCIONPath, Receipt, Violation)
-policies/          Jurisdiction policy YAML files
+policies/          Corridor policy YAML files
 ```
 
 ## Configuration
@@ -223,12 +280,12 @@ policies/          Jurisdiction policy YAML files
 | Environment Variable | Default | Description |
 |---|---|---|
 | `JURISPATH_LISTEN` | `:8080` | Server listen address |
-| `JURISPATH_POLICY_DIR` | `policies` | Path to jurisdiction policy YAML files |
+| `JURISPATH_POLICY_DIR` | `policies` | Path to corridor policy YAML files |
 | `JURISPATH_DASHBOARD_DIR` | `dashboard` | Path to dashboard static files |
 | `JURISPATH_DATA_DIR` | `data/` | Directory for BoltDB receipt, violation, and audit stores |
 | `JURISPATH_LOG_LEVEL` | `info` | Structured log level: `debug`, `info`, `warn`, or `error` |
 | `JURISPATH_ORACLE_KEY` | `data/oracle.key` | Active oracle signing key path. `/api/rotate-key` archives this file before installing a new key. |
-| `JURISPATH_TRC_DIR` | *(empty)* | Optional directory of signed `.trc` files used to populate verified receipt ISD proof material. Empty uses explicit placeholder proofs for local/demo mode. |
+| `JURISPATH_TRC_DIR` | *(empty)* | Optional directory of signed `.trc` files for experimental ISD proof metadata. This does not make API-supplied paths SCION-observed. Empty uses explicit placeholder proofs for local/demo mode. |
 | `JURISPATH_THRESHOLD_K` | *(empty)* | Optional receipt threshold-signing quorum. Must be set with `JURISPATH_THRESHOLD_N`. |
 | `JURISPATH_THRESHOLD_N` | *(empty)* | Optional receipt threshold-signing group size. The current implementation generates in-memory threshold oracle keys at startup. |
 | `JURISPATH_TLS_CERT` | *(empty)* | TLS certificate path. Must be set with `JURISPATH_TLS_KEY`. |
@@ -253,7 +310,7 @@ policies/          Jurisdiction policy YAML files
 - [SNB Working Paper 2025-15](https://www.snb.ch/en/publications/research/working-papers/2025/working_paper_2025_15) — SCION and cross-border payments: Enhancing security and compliance in DLT networks
 - [SCION Architecture](https://www.scion-architecture.net/) — A secure Internet architecture
 - [Secure Swiss Finance Network](https://www.six-group.com/en/products-services/banking-services/ssfn.html) — Production SCION deployment for Swiss finance
-- [FINMA Circular 2023/1](https://www.finma.ch/) — Operational risks and resilience requirements (compliance deadline: January 2026)
+- [FINMA Circular 2023/1](https://www.finma.ch/) — Operational risks and resilience; in force since 1 January 2024, with transitional provisions for selected requirements
 
 ## License
 
