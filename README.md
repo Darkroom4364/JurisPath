@@ -23,7 +23,7 @@ not a legal-compliance verdict.
 make demo
 ```
 
-For a 4-5 minute judge-facing walkthrough, use
+For a 4-5 minute walkthrough, use
 [docs/demo-script.md](docs/demo-script.md).
 
 Optional checks:
